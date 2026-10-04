@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 
+from infrastructure.api.controllers.role_controller import router as roles_router
 from shared.infrastructure.exceptions import register_exception_handlers
 
 app = FastAPI(title="Demo API", version="0.1.0")
 register_exception_handlers(app)
+app.include_router(roles_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"])

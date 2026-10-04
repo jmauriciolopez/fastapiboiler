@@ -1,22 +1,47 @@
-from typing import Any, Callable, TypeVar
-from fastapi import APIRouter, status
+from collections.abc import Callable
+from typing import Any, Generic, TypeVar
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel
+
 from shared.application.base_service import BaseService
 
 M = TypeVar("M")
 RequestSchema = TypeVar("RequestSchema", bound=BaseModel)
+UpdateSchema = TypeVar("UpdateSchema", bound=BaseModel)
+ResponseItem = TypeVar("ResponseItem")
+
+
+class PaginatedResponse(BaseModel, Generic[ResponseItem]):
+    items: list[ResponseItem]
+    total: int
+    limit: int
+    offset: int
+
 
 def create_generic_router(
-    service_instance: BaseService[M],
+    service_provider: Callable[..., BaseService[M]],
     request_schema: type[RequestSchema],
     entity_factory: Callable[[RequestSchema], M],
+    update_schema: type[UpdateSchema],
+    update_factory: Callable[[int | UUID, UpdateSchema], M],
     resource_name: str,
+    response_schema: type[BaseModel],
+    entity_id_type: type[int] | type[UUID] = int,
+    prefix: str = "",
+    tags: list[str] | None = None,
+    default_page_size: int = 20,
+    max_page_size: int = 100,
 ) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(prefix=prefix, tags=tags)
 
-    def create(payload: BaseModel) -> Any:
+    def create(
+        payload: BaseModel,
+        service: BaseService[M] = Depends(service_provider),  # noqa: B008
+    ) -> Any:
         validated_payload = request_schema.model_validate(payload.model_dump())
-        return service_instance.create(entity_factory(validated_payload))
+        return service.create(entity_factory(validated_payload))
 
     create.__annotations__["payload"] = request_schema
     router.add_api_route(
@@ -25,14 +50,75 @@ def create_generic_router(
         methods=["POST"],
         status_code=status.HTTP_201_CREATED,
         summary=f"Crear un {resource_name}",
+        response_model=response_schema,
     )
 
-    @router.get("/{entity_id}", status_code=status.HTTP_200_OK, summary=f"Obtener un {resource_name} por ID")
-    def get_by_id(entity_id: int) -> Any:
-        return service_instance.get_by_id(entity_id)
+    def get_by_id(
+        entity_id: int,
+        service: BaseService[M] = Depends(service_provider),  # noqa: B008
+    ) -> Any:
+        return service.get_by_id(entity_id)
 
-    @router.get("/", status_code=status.HTTP_200_OK, summary=f"Listar todos los {resource_name}s")
-    def list_all() -> Any:
-        return service_instance.list_all()
+    get_by_id.__annotations__["entity_id"] = entity_id_type
+    router.add_api_route(
+        "/{entity_id}",
+        get_by_id,
+        methods=["GET"],
+        status_code=status.HTTP_200_OK,
+        summary=f"Obtener un {resource_name} por ID",
+        response_model=response_schema,
+    )
+
+    def update(
+        entity_id: int,
+        payload: BaseModel,
+        service: BaseService[M] = Depends(service_provider),  # noqa: B008
+    ) -> Any:
+        validated_payload = update_schema.model_validate(payload.model_dump())
+        return service.update(entity_id, update_factory(entity_id, validated_payload))
+
+    update.__annotations__["entity_id"] = entity_id_type
+    update.__annotations__["payload"] = update_schema
+    router.add_api_route(
+        "/{entity_id}",
+        update,
+        methods=["PUT"],
+        status_code=status.HTTP_200_OK,
+        summary=f"Actualizar un {resource_name}",
+        response_model=response_schema,
+    )
+
+    def soft_delete(
+        entity_id: int,
+        service: BaseService[M] = Depends(service_provider),  # noqa: B008
+    ) -> Response:
+        service.soft_delete(entity_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    soft_delete.__annotations__["entity_id"] = entity_id_type
+    router.add_api_route(
+        "/{entity_id}",
+        soft_delete,
+        methods=["DELETE"],
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary=f"Eliminar lógicamente un {resource_name}",
+        response_class=Response,
+    )
+
+    def list_all(
+        limit: int = Query(default_page_size, ge=1, le=max_page_size),
+        offset: int = Query(0, ge=0),
+        service: BaseService[M] = Depends(service_provider),  # noqa: B008
+    ) -> Any:
+        return service.list_page(limit=limit, offset=offset)
+
+    router.add_api_route(
+        "/",
+        list_all,
+        methods=["GET"],
+        status_code=status.HTTP_200_OK,
+        summary=f"Listar {resource_name}s con paginación",
+        response_model=PaginatedResponse[response_schema],
+    )
 
     return router
