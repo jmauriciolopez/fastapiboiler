@@ -40,6 +40,8 @@ DATABASE_URL=postgresql+psycopg://...
 
 El paquete `psycopg[binary]` ya está declarado en `requirements.txt`. También se aceptan URLs con esquema `postgres://` o `postgresql://`; la configuración las normaliza al driver `postgresql+psycopg`. Mantén las credenciales reales fuera del código y no agregues el archivo `.env` al control de versiones.
 
+La autenticación JWT usa el encabezado `Authorization: Bearer <token>` y requiere `JWT_SECRET_KEY`. Por separado, las rutas que se protejan con `Depends(get_valid_api_key)` requieren `X-API-Key: <clave>` y `API_KEY`. La dependencia `get_valid_api_key` está disponible en `infrastructure.api.security`; actualmente no está aplicada a ninguna ruta. No se exige que ambas credenciales se envíen juntas.
+
 Una vez creada la base de datos, inicializa las tablas y luego inicia la API:
 
 ```powershell

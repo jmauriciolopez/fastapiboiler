@@ -13,3 +13,7 @@ class InvalidCredentialsException(AuthException):
 class InvalidTokenException(AuthException):
     def __init__(self, message: str = "Invalid or expired token") -> None:
         super().__init__(message)
+
+
+class InvalidAPIKeyException(Exception):
+    """La API Key falta o no coincide con la clave configurada."""
