@@ -30,6 +30,24 @@ uvicorn main:app --reload
 
 La API estará disponible en <http://127.0.0.1:8000>. La documentación interactiva de Swagger UI está en <http://127.0.0.1:8000/docs> y la especificación OpenAPI en <http://127.0.0.1:8000/openapi.json>.
 
+## Ejecutar con Docker
+
+Construye la imagen desde la raíz del proyecto:
+
+```powershell
+docker build -t demo-api .
+```
+
+La aplicación requiere que `DATABASE_URL` apunte a una base de datos PostgreSQL accesible desde el contenedor y que `JWT_SECRET_KEY` esté configurada. En PowerShell, establece las variables y arranca el contenedor:
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://..."
+$env:JWT_SECRET_KEY = "..."
+docker run --rm -p 8000:8000 -e DATABASE_URL -e JWT_SECRET_KEY demo-api
+```
+
+La API quedará disponible en <http://localhost:8000>. Si PostgreSQL corre en el host Windows, usa `host.docker.internal` como host en `DATABASE_URL`, no `localhost`. Las tablas deben estar creadas antes de usar la API; para inicializarlas con la misma configuración, ejecuta `docker run --rm -e DATABASE_URL demo-api python -m scripts.create_tables`. La imagen incluye un health check contra `/health`. No copies secretos al contexto de build; los archivos `.env` están excluidos por `.dockerignore`.
+
 ## Configurar PostgreSQL
 
 La API lee `DATABASE_URL` desde el entorno o desde un archivo `.env` en la raíz. Para PostgreSQL con Psycopg 3, configura `DATABASE_URL` con una URL SQLAlchemy que use el driver `postgresql+psycopg` y los datos de conexión de tu entorno. Por ejemplo, el valor debe tener este formato:
