@@ -1,24 +1,29 @@
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from functools import lru_cache
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
+
+
 load_dotenv()
 
 
 @lru_cache
-def _get_session_factory(database_url: str) -> sessionmaker[Session]:
-    normalized_url = _normalize_database_url(database_url)
+def _get_session_factory(database_url: str) -> Callable[[], Session]:
+    normalized_url = normalize_database_url(database_url)
     engine = create_engine(normalized_url, pool_pre_ping=True)
     return sessionmaker(autoflush=False, bind=engine)
 
 
-def _normalize_database_url(database_url: str) -> str:
+def normalize_database_url(database_url: str) -> str:
+    """Traduce una URL de SQLAlchemy al driver psycopg cuando usa PostgreSQL."""
     url = make_url(database_url)
     if url.drivername in {"postgres", "postgresql"}:
         url = url.set(drivername="postgresql+psycopg")

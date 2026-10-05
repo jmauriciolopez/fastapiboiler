@@ -1,3 +1,30 @@
 [tool.hatch.envs.default.scripts]
 build = "python -m compileall ."
 lint = "ruff check ."
+typecheck = "mypy ."
+check = ["lint", "typecheck"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+exclude = ["^\\.venv/", "^build/", "^alembic/"]
+
+[[tool.mypy.overrides]]
+module = ["passlib.*", "jose.*"]
+ignore_missing_imports = true
+
+
+[tool.ruff.lint]
+ignore = [
+    "D100", # missing-module-docstring
+    "D101", # missing-class-docstring
+    "D103", # missing-function-docstring
+]
+[tool.pylint.messages_control]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+]

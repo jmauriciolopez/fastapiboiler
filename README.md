@@ -1,6 +1,6 @@
 # Demo API
 
-API REST en desarrollo con FastAPI, organizada con una base de arquitectura hexagonal. Incluye la entidad `Role` y endpoints para crear, listar y consultar roles. Los contratos genéricos permiten agregar otros recursos siguiendo las capas de dominio, aplicación e infraestructura.
+API REST en desarrollo con FastAPI, organizada con una base de arquitectura hexagonal. Incluye las entidades `Role` y `User`, con endpoints CRUD y borrado lógico. Los contratos genéricos permiten agregar otros recursos siguiendo las capas de dominio, aplicación e infraestructura.
 
 ## Requisitos
 
@@ -40,27 +40,32 @@ DATABASE_URL=postgresql+psycopg://...
 
 El paquete `psycopg[binary]` ya está declarado en `requirements.txt`. También se aceptan URLs con esquema `postgres://` o `postgresql://`; la configuración las normaliza al driver `postgresql+psycopg`. Mantén las credenciales reales fuera del código y no agregues el archivo `.env` al control de versiones.
 
-Una vez creada la base de datos, inicializa la tabla de roles y luego inicia la API:
+Una vez creada la base de datos, inicializa las tablas y luego inicia la API:
 
 ```powershell
 python -m scripts.create_tables
 uvicorn main:app --reload
 ```
 
-El script crea la tabla `roles` si no existe; no aplica migraciones ni modifica tablas existentes.
+El script crea las tablas `roles`, `users` y `user_roles` si no existen; no aplica migraciones ni modifica tablas existentes.
+
+Si ya tienes una base de datos creada con el esquema anterior, aplica una migración antes de desplegar esta versión: renombra `roles.rol` a `roles.name`, elimina el índice único global anterior de `users.email` y crea los índices únicos parciales `uq_users_active_email_ci` y `uq_roles_active_name_ci`. `create_tables` no transforma datos ni actualiza índices existentes.
 
 ### Rutas disponibles
 
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | `GET` | `/health` | Comprueba que la API está activa. |
-| `GET` | `/` | Ruta de ejemplo. |
-| `GET` | `/items/{item_id}?q=texto` | Ruta de ejemplo; no usa una entidad ni una base de datos. |
 | `POST` | `/api/v1/roles/` | Crea un rol y responde `201`. |
 | `GET` | `/api/v1/roles/?limit=20&offset=0` | Lista roles activos con paginación. |
 | `GET` | `/api/v1/roles/{role_id}` | Obtiene un rol o responde `404` si no existe. |
-| `PUT` | `/api/v1/roles/{role_id}` | Actualiza el nombre (`rol`) del rol. |
+| `PUT` | `/api/v1/roles/{role_id}` | Actualiza el nombre del rol. |
 | `DELETE` | `/api/v1/roles/{role_id}` | Marca el rol como eliminado; responde `204`. |
+| `POST` | `/api/v1/users/` | Crea un usuario; recibe contraseña y la persiste como hash Argon2. |
+| `GET` | `/api/v1/users/?limit=20&offset=0` | Lista usuarios activos con paginación. |
+| `GET` | `/api/v1/users/{user_id}` | Obtiene un usuario y sus roles activos. |
+| `PUT` | `/api/v1/users/{user_id}` | Actualiza el usuario, roles y opcionalmente su contraseña. |
+| `DELETE` | `/api/v1/users/{user_id}` | Marca el usuario como eliminado; responde `204`. |
 
 ## Estructura actual
 
@@ -69,41 +74,83 @@ main.py
 domain/
   entities/
     role.py
+    user.py
+  exceptions/
+    auth_exceptions.py
+  repositories/
+    role_repository.py
+    user_repository.py
+application/
+  ports/
+    password_hasher.py
+    token_service.py
+  services/
+    auth_service.py
+    role_service.py
+    user_service.py
 infrastructure/
   api/
+    dependencies.py
+    exceptions.py
     controllers/
       role_controller.py
+      user_controller.py
     schemas/
       role_schemas.py
+      user_schemas.py
   database/
     models/
       role_orm.py
+      user_orm.py
+    repositories/
+      role_repository.py
+      user_repository.py
+  security/
+    password_hasher.py
 shared/
   application/
     base_service.py
   domain/
-    base_repository.py
     entities.py
     exceptions.py
+    pagination.py
+    repository_port.py
   infrastructure/
     database.py
     exceptions.py
     generic_controller.py
+    integrity_errors.py
     sql_repository.py
 scripts/
   create_tables.py
 tests/
-  test_api.py
+  conftest.py
+  fakes.py
+  unit/
+    test_base_service.py
+    test_database.py
+    test_entities.py
+    test_exception_handlers.py
+    test_generic_router.py
+    test_integrity_errors.py
+    test_password_hasher.py
+    test_schemas.py
+  integration/
+    test_health.py
+    test_roles_api.py
+    test_users_api.py
 requirements.txt
 ```
 
-- **Dominio:** contrato genérico `BaseRepository` y excepciones de dominio.
-- **Aplicación:** `BaseService` delega las operaciones a un repositorio.
-- **Infraestructura:** configuración de sesiones SQLAlchemy, implementación base del repositorio SQL, fábrica de routers y adaptación de excepciones de dominio a respuestas HTTP.
-- **Roles:** entidad en `domain/`, esquemas HTTP y adaptadores en `infrastructure/`; su controlador usa `create_generic_router` y provee el servicio/repositorio por solicitud.
-- **Composición:** `main.py` crea la aplicación, registra los manejadores de excepciones y monta el router `/api/v1/roles`.
+- **Dominio:** entidades, contrato genérico `RepositoryPort` y puertos especializados para `Role` y `User`. Los repositorios concretos declaran explícitamente el puerto que implementan.
+- **Aplicación:** `RoleService` y `UserService` dependen de puertos del dominio y reutilizan `BaseService`; `UserService` además aplica reglas de usuario y usa el puerto `PasswordHasher`.
+- **Infraestructura:** configuración de sesiones SQLAlchemy, implementación base del repositorio SQL que centraliza `commit`/`rollback`, fábrica de routers y adaptación de excepciones a respuestas HTTP (dominio y 500 genérico).
+- **Roles:** el controlador usa `create_generic_router` con `RoleService`; el servicio depende de `RoleRepositoryPort`, y el proveedor de infraestructura conecta el puerto con `RoleRepository` por solicitud.
+- **Composición:** `main.py` crea la aplicación, registra los manejadores de excepciones y monta los routers `/api/v1/roles` y `/api/v1/users`.
 
-El controlador de roles reutiliza `create_generic_router`. La fábrica recibe el proveedor de servicio, los esquemas HTTP y el tipo de ID, para exponer operaciones comunes sin compartir una sesión SQLAlchemy entre solicitudes.
+El controlador de roles reutiliza `create_generic_router`. La fábrica recibe el proveedor de servicio, los esquemas HTTP y el tipo de ID, para exponer operaciones comunes sin compartir una sesión SQLAlchemy entre solicitudes. La selección del adaptador concreto se hace fuera del controlador, en `infrastructure/api/dependencies.py`.
+
+`SQLBaseRepository` realiza las escrituras a través de un límite transaccional común: si `commit` falla, revierte la sesión. Las restricciones únicas conocidas se declaran en `_integrity_conflict_messages` y se traducen a `DomainConflictException`; cualquier otro `IntegrityError` se repropaga. Para adaptar el mapeo de una entidad con relaciones, se puede sobrescribir `_to_orm`; `UserRepository` lo hace para asociar los roles y sigue reutilizando `save` del repositorio base.
 
 ## Paginación, actualización y eliminación lógica
 
@@ -111,7 +158,7 @@ Los endpoints de colección aceptan `limit` (entre 1 y 100; valor predeterminado
 
 ```json
 {
-  "items": [{"id": "UUID", "rol": "admin"}],
+  "items": [{"id": "UUID", "name": "admin"}],
   "total": 1,
   "limit": 20,
   "offset": 0
@@ -124,17 +171,17 @@ Ejemplo de página siguiente:
 curl.exe "http://127.0.0.1:8000/api/v1/roles/?limit=10&offset=10"
 ```
 
-`PUT /api/v1/roles/{role_id}` reemplaza los campos editables del rol. El cuerpo actual es:
+`PUT /api/v1/roles/{role_id}` reemplaza los campos editables del rol. El cuerpo es:
 
 ```json
-{"rol": "editor"}
+{"name": "editor"}
 ```
 
 `DELETE /api/v1/roles/{role_id}` hace una eliminación lógica: conserva la fila y marca `deleted=true`. Los roles eliminados no aparecen en el listado ni se pueden consultar o actualizar; esas operaciones responden 404.
 
-### Respuestas de errores de dominio
+### Respuestas de error
 
-Los errores de dominio usan un formato JSON uniforme:
+Los errores de dominio y los fallos no mapeados usan el mismo sobre JSON:
 
 ```json
 {
@@ -145,11 +192,24 @@ Los errores de dominio usan un formato JSON uniforme:
 }
 ```
 
-Los códigos HTTP son 404 para recursos inexistentes o eliminados, 422 para errores de validación del dominio, 409 para conflictos y 400 para otros errores de dominio. Los errores de validación del cuerpo y parámetros HTTP continúan usando el formato estándar de FastAPI.
+| Origen | HTTP | `code` |
+| --- | --- | --- |
+| Recurso inexistente o eliminado | 404 | `not_found` |
+| Validación de reglas de dominio | 422 | `domain_validation_error` |
+| Conflicto (unicidad clasificada) | 409 | `conflict` |
+| Credenciales inválidas | 401 | `invalid_credentials` |
+| Otro error de dominio | 400 | `domain_error` |
+| Excepción no mapeada | 500 | `internal_error` |
+
+`AuthException` hereda de `DomainException`, y su manejador específico se registra en `infrastructure/api/exceptions.py` sobre los genéricos de `shared/infrastructure/exceptions.py`: responde `401` con la cabecera `WWW-Authenticate: Bearer`. Así el dominio no conoce códigos HTTP y el kernel compartido no depende del dominio de la aplicación.
+
+Las violaciones de unicidad de `uq_users_active_email_ci` y `uq_roles_active_name_ci` se convierten en `DomainConflictException` (409). Un `IntegrityError` de FK, `NOT NULL` u otro índice no se clasifica: sale como 500 con `code` `internal_error` y el mensaje fijo `"Error interno del servidor."`, sin detalle SQL. El traceback queda en el log del servidor.
+
+Los errores de validación del cuerpo y parámetros HTTP continúan usando el formato estándar de FastAPI; no usan este sobre.
 
 ## Entidad Role
 
-`Role` es la primera entidad concreta del proyecto. Contiene `id` (UUID generado en el dominio) y `rol` (texto obligatorio de 1 a 80 caracteres); hereda los campos de auditoría y eliminación lógica de `AuditableEntity`, que no se exponen en el esquema HTTP.
+`Role` contiene `id` (UUID generado en el dominio) y `name` (texto obligatorio de 1 a 80 caracteres); hereda los campos de auditoría y eliminación lógica de `AuditableEntity`, que no se exponen en el esquema HTTP. Los nombres de rol son únicos sin distinguir mayúsculas entre roles activos; al eliminar un rol lógicamente, su nombre puede reutilizarse.
 
 Los archivos que la implementan son:
 
@@ -158,7 +218,7 @@ Los archivos que la implementan son:
 | Dominio | `domain/entities/role.py` | Entidad Python `Role`, basada en la clase auditable existente. |
 | Infraestructura/API | `infrastructure/api/schemas/role_schemas.py` | Validación de entrada y respuesta HTTP. |
 | Infraestructura/BD | `infrastructure/database/models/role_orm.py` | Tabla SQLAlchemy `roles`. |
-| Infraestructura/API | `infrastructure/api/controllers/role_controller.py` | Endpoints, servicio y repositorio por solicitud. |
+| Infraestructura/API | `infrastructure/api/controllers/role_controller.py` | Router CRUD genérico; el servicio se inyecta desde `dependencies.py`. |
 
 Ejemplo para crear un rol:
 
@@ -167,16 +227,16 @@ Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:8000/api/v1/roles/ `
   -ContentType "application/json" `
-  -Body '{"rol":"admin"}'
+  -Body '{"name":"admin"}'
 ```
 
-Para consultar o actualizar un rol, usa su UUID, devuelto al crearlo. `GET /api/v1/roles/` devuelve una página de resultados; `DELETE /api/v1/roles/{role_id}` lo elimina lógicamente. La documentación interactiva en `/docs` muestra las rutas y los esquemas.
+Para consultar o actualizar un rol, usa su UUID, devuelto al crearlo. `GET /api/v1/roles/` devuelve una página de resultados; `DELETE /api/v1/roles/{role_id}` lo elimina lógicamente. Los nombres duplicados responden `409`. La documentación interactiva en `/docs` muestra las rutas y los esquemas.
 
-Para agregar otra entidad, sigue el mismo patrón por capas: entidad de dominio, esquemas Pydantic, modelo SQLAlchemy con un campo booleano `deleted`, proveedor de servicio por solicitud y registro del router genérico. La paginación y operaciones genéricas dependen de que el repositorio respete el contrato de `BaseRepository`.
+Para agregar otra entidad, sigue el mismo patrón por capas: entidad de dominio, esquemas Pydantic, modelo SQLAlchemy con un campo booleano `deleted`, proveedor de servicio por solicitud y registro del router genérico. La paginación y operaciones genéricas dependen de que el repositorio respete el contrato de `RepositoryPort`.
 
 ## Base de datos
 
-Las rutas `/health`, `/` e `/items` funcionan sin base de datos. Para endpoints de roles, configura `DATABASE_URL` antes de inicializar el esquema y ejecutar la API; no hay URL con credenciales por defecto. Para opciones de configuración de PostgreSQL, consulta [Configurar PostgreSQL](#configurar-postgresql).
+La ruta `/health` funciona sin base de datos. Para los endpoints de roles y usuarios, configura `DATABASE_URL` antes de inicializar el esquema y ejecutar la API; no hay URL con credenciales por defecto. Para opciones de configuración de PostgreSQL, consulta [Configurar PostgreSQL](#configurar-postgresql).
 
 Como alternativa, puedes usar SQLite en PowerShell:
 
@@ -184,13 +244,31 @@ Como alternativa, puedes usar SQLite en PowerShell:
 $env:DATABASE_URL = "sqlite:///./app.db"
 ```
 
-Con `DATABASE_URL` configurada, crea la tabla `roles`:
+Con `DATABASE_URL` configurada, crea las tablas `roles`, `users` y `user_roles`:
 
 ```powershell
 python -m scripts.create_tables
 ```
 
-`get_db()` abre y cierra una sesión por solicitud. El esquema `roles` debe incluir los campos `deleted` y `updated_on` para soportar eliminación lógica y fecha de modificación. Si ya existía antes de esos campos, actualízalo mediante una migración (por ejemplo, Alembic); `create_tables` no altera tablas existentes.
+`get_db()` abre y cierra una sesión por solicitud. Si las tablas ya existían antes de agregar los campos de usuario, actualízalas mediante una migración (por ejemplo, Alembic); `create_tables` no altera tablas existentes.
+
+## Entidad User
+
+La API recibe `password` al crear o actualizar, lo transforma con Argon2 en el servidor y lo persiste únicamente en la columna `password_hash`. El campo de dominio se llama `hashed_password` y las respuestas nunca exponen ni `password` ni `hashed_password`. Los usuarios nuevos comienzan en estado `pending`; los estados disponibles son `pending`, `active`, `inactive` y `blocked`. Cada usuario puede asociarse a varios roles existentes y activos mediante `role_ids`. Los emails activos son únicos; si una cuenta se elimina lógicamente, su email puede reutilizarse.
+
+Ejemplo de creación:
+
+```json
+{
+  "username": "Ada Lovelace",
+  "email": "ada@example.com",
+  "phone": "+1-555-0100",
+  "password": "una-clave-segura",
+  "role_ids": ["UUID-de-un-rol"]
+}
+```
+
+Si se omite `role_ids`, el usuario se crea sin roles. En `PUT`, envía un nuevo `password` para cambiar la credencial; si se omite o es `null`, se conserva el hash actual. Los roles inexistentes o eliminados generan `404`; los correos duplicados, `409`.
 
 ## Pruebas
 
@@ -198,16 +276,34 @@ python -m scripts.create_tables
 python -m pytest -q
 ```
 
-Las pruebas cubren las rutas de ejemplo, el endpoint de salud, el manejo de errores, la paginación, actualización y eliminación lógica, usando una base SQLite en memoria para las rutas de roles.
+Las pruebas están separadas por tipo: `tests/unit/` no toca la base de datos (entidades, esquemas, `BaseService`, router genérico, clasificador de integridad, manejadores HTTP —incluido el 500 JSON— y configuración de la base) y `tests/integration/` levanta la aplicación completa contra SQLite en memoria (salud, roles, usuarios y hash de contraseña).
 
-## Ruff
+`tests/fakes.py` expone un único `InMemoryRepository` genérico que respeta el contrato de `RepositoryPort`. `tests/conftest.py` aporta las fixtures compartidas `engine`, `session_factory` y `client`; esta última sustituye `get_db` por la base en memoria y restaura los overrides al terminar cada prueba.
 
-Ruff está incluido en `requirements.txt`. Para revisar el código Python desde la raíz:
+Para ejecutar solo una suite:
+
+```powershell
+python -m pytest tests/unit -q
+python -m pytest tests/integration -q
+```
+
+## Lint y tipos
+
+Ruff y mypy están en `requirements.txt`. Desde la raíz:
 
 ```powershell
 ruff check .
+mypy .
 ```
+
+O ambos a la vez con el entorno de hatch:
+
+```powershell
+hatch run check
+```
+
+Mypy corre en modo `strict` con el plugin de Pydantic. Que el proyecto pase la comprobación es parte del contrato: las clases base genéricas (`RepositoryPort`, `SQLBaseRepository`, `BaseService`) existen en parte para que el tipado se propague sin `Any` sueltos.
 
 ## Estado actual
 
-La entidad `Role` expone creación, lectura paginada, actualización completa y eliminación lógica. Las migraciones de base de datos aún no están implementadas.
+Las entidades `Role` y `User` exponen creación, lectura paginada, actualización completa y eliminación lógica. La capa de autenticación está en curso: `AuthService.login` y los puertos `PasswordHasher` y `TokenServicePort` ya existen, pero todavía no hay implementación de `TokenServicePort`, endpoint de login ni pruebas del servicio. Las migraciones de base de datos tampoco están implementadas.

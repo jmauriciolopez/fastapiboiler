@@ -2,8 +2,9 @@ import os
 
 from sqlalchemy import create_engine
 
-from infrastructure.database.models.role_orm import RoleORM
-from shared.infrastructure.database import Base, _normalize_database_url
+from infrastructure.database.models.role_orm import RoleORM  # noqa: F401
+from infrastructure.database.models.user_orm import UserORM  # noqa: F401
+from shared.infrastructure.database import Base, normalize_database_url
 
 
 def main() -> None:
@@ -11,9 +12,9 @@ def main() -> None:
     if not database_url:
         raise RuntimeError("DATABASE_URL debe configurarse antes de crear las tablas.")
 
-    engine = create_engine(_normalize_database_url(database_url), pool_pre_ping=True)
+    engine = create_engine(normalize_database_url(database_url), pool_pre_ping=True)
     try:
-        Base.metadata.create_all(bind=engine, tables=[RoleORM.__table__])
+        Base.metadata.create_all(bind=engine)
     finally:
         engine.dispose()
 

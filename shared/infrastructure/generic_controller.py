@@ -1,11 +1,14 @@
 from collections.abc import Callable
+from enum import Enum
+from inspect import signature
 from typing import Any, Generic, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from shared.application.base_service import BaseService
+from shared.domain.pagination import PaginatedResult
 
 M = TypeVar("M")
 RequestSchema = TypeVar("RequestSchema", bound=BaseModel)
@@ -20,6 +23,31 @@ class PaginatedResponse(BaseModel, Generic[ResponseItem]):
     offset: int
 
 
+def _create_paginated_response_schema(response_schema: type[BaseModel]) -> type[BaseModel]:
+    item_list_schema = list.__class_getitem__(response_schema)
+    return create_model(
+        f"Paginated{response_schema.__name__}",
+        items=(item_list_schema, ...),
+        total=(int, ...),
+        limit=(int, ...),
+        offset=(int, ...),
+    )
+
+
+def _with_parameter_types(
+    endpoint: Callable[..., Any],
+    parameter_types: dict[str, Any],
+) -> None:
+    endpoint_signature = signature(endpoint)
+    parameters = [
+        parameter.replace(annotation=parameter_types.get(parameter.name, parameter.annotation))
+        for parameter in endpoint_signature.parameters.values()
+    ]
+    endpoint.__signature__ = endpoint_signature.replace(  # type: ignore[attr-defined]
+        parameters=parameters
+    )
+
+
 def create_generic_router(
     service_provider: Callable[..., BaseService[M]],
     request_schema: type[RequestSchema],
@@ -30,20 +58,20 @@ def create_generic_router(
     response_schema: type[BaseModel],
     entity_id_type: type[int] | type[UUID] = int,
     prefix: str = "",
-    tags: list[str] | None = None,
+    tags: list[str | Enum] | None = None,
     default_page_size: int = 20,
     max_page_size: int = 100,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=tags)
+    paginated_response_schema = _create_paginated_response_schema(response_schema)
 
     def create(
-        payload: BaseModel,
+        payload: RequestSchema,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
-    ) -> Any:
-        validated_payload = request_schema.model_validate(payload.model_dump())
-        return service.create(entity_factory(validated_payload))
+    ) -> M:
+        return service.create(entity_factory(payload))
 
-    create.__annotations__["payload"] = request_schema
+    _with_parameter_types(create, {"payload": request_schema})
     router.add_api_route(
         "/",
         create,
@@ -54,12 +82,12 @@ def create_generic_router(
     )
 
     def get_by_id(
-        entity_id: int,
+        entity_id: int | UUID,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
-    ) -> Any:
+    ) -> M:
         return service.get_by_id(entity_id)
 
-    get_by_id.__annotations__["entity_id"] = entity_id_type
+    _with_parameter_types(get_by_id, {"entity_id": entity_id_type})
     router.add_api_route(
         "/{entity_id}",
         get_by_id,
@@ -70,15 +98,16 @@ def create_generic_router(
     )
 
     def update(
-        entity_id: int,
-        payload: BaseModel,
+        entity_id: int | UUID,
+        payload: UpdateSchema,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
-    ) -> Any:
-        validated_payload = update_schema.model_validate(payload.model_dump())
-        return service.update(entity_id, update_factory(entity_id, validated_payload))
+    ) -> M:
+        return service.update(entity_id, update_factory(entity_id, payload))
 
-    update.__annotations__["entity_id"] = entity_id_type
-    update.__annotations__["payload"] = update_schema
+    _with_parameter_types(
+        update,
+        {"entity_id": entity_id_type, "payload": update_schema},
+    )
     router.add_api_route(
         "/{entity_id}",
         update,
@@ -89,13 +118,13 @@ def create_generic_router(
     )
 
     def soft_delete(
-        entity_id: int,
+        entity_id: int | UUID,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> Response:
         service.soft_delete(entity_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    soft_delete.__annotations__["entity_id"] = entity_id_type
+    _with_parameter_types(soft_delete, {"entity_id": entity_id_type})
     router.add_api_route(
         "/{entity_id}",
         soft_delete,
@@ -109,7 +138,7 @@ def create_generic_router(
         limit: int = Query(default_page_size, ge=1, le=max_page_size),
         offset: int = Query(0, ge=0),
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
-    ) -> Any:
+    ) -> PaginatedResult[M]:
         return service.list_page(limit=limit, offset=offset)
 
     router.add_api_route(
@@ -118,7 +147,7 @@ def create_generic_router(
         methods=["GET"],
         status_code=status.HTTP_200_OK,
         summary=f"Listar {resource_name}s con paginación",
-        response_model=PaginatedResponse[response_schema],
+        response_model=paginated_response_schema,
     )
 
     return router

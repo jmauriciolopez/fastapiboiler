@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
@@ -7,6 +9,8 @@ from shared.domain.exceptions import (
     DomainValidationException,
     EntityNotFoundException,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -56,4 +60,17 @@ def register_exception_handlers(app: FastAPI) -> None:
             exc,
             status_code=status.HTTP_400_BAD_REQUEST,
             code="domain_error",
+        )
+
+    @app.exception_handler(Exception)
+    def unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled exception", exc_info=exc)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": {
+                    "code": "internal_error",
+                    "message": "Error interno del servidor.",
+                }
+            },
         )

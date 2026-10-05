@@ -1,19 +1,19 @@
 from typing import Generic, TypeVar
 from uuid import UUID
 
-from shared.application.pagination import PaginatedResult
-from shared.domain.base_repository import BaseRepository
+from shared.domain.pagination import PaginatedResult
+from shared.domain.repository_port import RepositoryPort
 
 M = TypeVar("M")
 
 class BaseService(Generic[M]):
-    def __init__(self, repository: BaseRepository[M]) -> None:
+    def __init__(self, repository: RepositoryPort[M]) -> None:
         self.repository = repository
 
     def create(self, entity: M) -> M:
         return self.repository.save(entity)
 
-    def get_by_id(self, entity_id: int | UUID) -> M | None:
+    def get_by_id(self, entity_id: int | UUID) -> M:
         return self.repository.get_by_id(entity_id)
 
     def list_all(self) -> list[M]:
