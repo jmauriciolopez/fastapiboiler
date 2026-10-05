@@ -69,7 +69,7 @@ python -m scripts.create_tables
 uvicorn main:app --reload
 ```
 
-El script crea las tablas `roles`, `users` y `user_roles` si no existen; no aplica migraciones ni modifica tablas existentes.
+El script crea las tablas `products`, `roles`, `users` y `user_roles` si no existen; no aplica migraciones ni modifica tablas existentes.
 
 Si ya tienes una base de datos creada con el esquema anterior, aplica una migración antes de desplegar esta versión: renombra `roles.rol` a `roles.name`, elimina el índice único global anterior de `users.email` y crea los índices únicos parciales `uq_users_active_email_ci` y `uq_roles_active_name_ci`. `create_tables` no transforma datos ni actualiza índices existentes.
 
@@ -83,6 +83,11 @@ Si ya tienes una base de datos creada con el esquema anterior, aplica una migrac
 | `GET` | `/api/v1/roles/{role_id}` | Obtiene un rol o responde `404` si no existe. |
 | `PUT` | `/api/v1/roles/{role_id}` | Actualiza el nombre del rol. |
 | `DELETE` | `/api/v1/roles/{role_id}` | Marca el rol como eliminado; responde `204`. |
+| `POST` | `/api/v1/products/` | Crea un producto. |
+| `GET` | `/api/v1/products/?limit=20&offset=0` | Lista productos activos con paginación. |
+| `GET` | `/api/v1/products/{product_id}` | Obtiene un producto o responde `404` si no existe. |
+| `PUT` | `/api/v1/products/{product_id}` | Actualiza el nombre del producto. |
+| `DELETE` | `/api/v1/products/{product_id}` | Marca el producto como eliminado; responde `204`. |
 | `POST` | `/api/v1/users/` | Crea un usuario; recibe contraseña y la persiste como hash Argon2. |
 | `GET` | `/api/v1/users/?limit=20&offset=0` | Lista usuarios activos con paginación. |
 | `GET` | `/api/v1/users/{user_id}` | Obtiene un usuario y sus roles activos. |
@@ -95,11 +100,13 @@ Si ya tienes una base de datos creada con el esquema anterior, aplica una migrac
 main.py
 domain/
   entities/
+    product.py
     role.py
     user.py
   exceptions/
     auth_exceptions.py
   repositories/
+    product_repository.py
     role_repository.py
     user_repository.py
 application/
@@ -108,6 +115,7 @@ application/
     token_service.py
   services/
     auth_service.py
+    product_service.py
     role_service.py
     user_service.py
 infrastructure/
@@ -115,16 +123,20 @@ infrastructure/
     dependencies.py
     exceptions.py
     controllers/
+      product_controller.py
       role_controller.py
       user_controller.py
     schemas/
+      product_schemas.py
       role_schemas.py
       user_schemas.py
   database/
     models/
+      product_orm.py
       role_orm.py
       user_orm.py
     repositories/
+      product_repository.py
       role_repository.py
       user_repository.py
   security/
@@ -159,16 +171,17 @@ tests/
     test_schemas.py
   integration/
     test_health.py
+    test_products_api.py
     test_roles_api.py
     test_users_api.py
 requirements.txt
 ```
 
-- **Dominio:** entidades, contrato genérico `RepositoryPort` y puertos especializados para `Role` y `User`. Los repositorios concretos declaran explícitamente el puerto que implementan.
-- **Aplicación:** `RoleService` y `UserService` dependen de puertos del dominio y reutilizan `BaseService`; `UserService` además aplica reglas de usuario y usa el puerto `PasswordHasher`.
+- **Dominio:** entidades `Product`, `Role` y `User`, contrato genérico `RepositoryPort` y puertos especializados. Los repositorios concretos declaran explícitamente el puerto que implementan.
+- **Aplicación:** `ProductService`, `RoleService` y `UserService` dependen de puertos del dominio y reutilizan `BaseService`; `UserService` además aplica reglas de usuario y usa el puerto `PasswordHasher`.
 - **Infraestructura:** configuración de sesiones SQLAlchemy, implementación base del repositorio SQL que centraliza `commit`/`rollback`, fábrica de routers y adaptación de excepciones a respuestas HTTP (dominio y 500 genérico).
 - **Roles:** el controlador usa `create_generic_router` con `RoleService`; el servicio depende de `RoleRepositoryPort`, y el proveedor de infraestructura conecta el puerto con `RoleRepository` por solicitud.
-- **Composición:** `main.py` crea la aplicación, registra los manejadores de excepciones y monta los routers `/api/v1/roles` y `/api/v1/users`.
+- **Composición:** `main.py` crea la aplicación, registra los manejadores de excepciones y monta los routers `/api/v1/products`, `/api/v1/roles` y `/api/v1/users`.
 
 El controlador de roles reutiliza `create_generic_router`. La fábrica recibe el proveedor de servicio, los esquemas HTTP y el tipo de ID, para exponer operaciones comunes sin compartir una sesión SQLAlchemy entre solicitudes. La selección del adaptador concreto se hace fuera del controlador, en `infrastructure/api/dependencies.py`.
 
@@ -207,10 +220,12 @@ Los errores de dominio y los fallos no mapeados usan el mismo sobre JSON:
 
 ```json
 {
-  "error": {
-    "code": "not_found",
-    "message": "Rol con ID ... no existe."
-  }
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Rol con ID ... no existe.",
+  "instance": "/api/v1/roles/...",
+  "code": "not_found"
 }
 ```
 
@@ -218,16 +233,19 @@ Los errores de dominio y los fallos no mapeados usan el mismo sobre JSON:
 | --- | --- | --- |
 | Recurso inexistente o eliminado | 404 | `not_found` |
 | Validación de reglas de dominio | 422 | `domain_validation_error` |
+| Validación de parámetros o cuerpo HTTP | 422 | `request_validation_error` |
 | Conflicto (unicidad clasificada) | 409 | `conflict` |
 | Credenciales inválidas | 401 | `invalid_credentials` |
+| Token inválido o expirado | 401 | `invalid_token` |
+| API Key inválida o ausente | 403 | `invalid_api_key` |
 | Otro error de dominio | 400 | `domain_error` |
 | Excepción no mapeada | 500 | `internal_error` |
 
-`AuthException` hereda de `DomainException`, y su manejador específico se registra en `infrastructure/api/exceptions.py` sobre los genéricos de `shared/infrastructure/exceptions.py`: responde `401` con la cabecera `WWW-Authenticate: Bearer`. Así el dominio no conoce códigos HTTP y el kernel compartido no depende del dominio de la aplicación.
+Todos estos errores usan `application/problem+json` conforme a RFC 9457, con extensiones estables `code` y, para errores de entrada, `errors`. `AuthException` hereda de `DomainException`, y su manejador específico se registra en `infrastructure/api/exceptions.py` sobre los genéricos de `shared/infrastructure/exceptions.py`: responde `401` con la cabecera `WWW-Authenticate: Bearer`. Así el dominio no conoce códigos HTTP y el kernel compartido no depende del dominio de la aplicación.
 
 Las violaciones de unicidad de `uq_users_active_email_ci` y `uq_roles_active_name_ci` se convierten en `DomainConflictException` (409). Un `IntegrityError` de FK, `NOT NULL` u otro índice no se clasifica: sale como 500 con `code` `internal_error` y el mensaje fijo `"Error interno del servidor."`, sin detalle SQL. El traceback queda en el log del servidor.
 
-Los errores de validación del cuerpo y parámetros HTTP continúan usando el formato estándar de FastAPI; no usan este sobre.
+Las respuestas de validación incluyen ubicación, mensaje y tipo de cada error en la extensión `errors`, sin incluir los valores recibidos.
 
 ## Entidad Role
 
@@ -254,11 +272,146 @@ Invoke-RestMethod `
 
 Para consultar o actualizar un rol, usa su UUID, devuelto al crearlo. `GET /api/v1/roles/` devuelve una página de resultados; `DELETE /api/v1/roles/{role_id}` lo elimina lógicamente. Los nombres duplicados responden `409`. La documentación interactiva en `/docs` muestra las rutas y los esquemas.
 
-Para agregar otra entidad, sigue el mismo patrón por capas: entidad de dominio, esquemas Pydantic, modelo SQLAlchemy con un campo booleano `deleted`, proveedor de servicio por solicitud y registro del router genérico. La paginación y operaciones genéricas dependen de que el repositorio respete el contrato de `RepositoryPort`.
+## Agregar una entidad y exponer su controller
+
+Para agregar, por ejemplo, una entidad `Product` con CRUD genérico, crea los componentes en sus capas y conecta el router en la composición de infraestructura. El controller es un adaptador HTTP: valida/serializa y delega al servicio; no debe contener reglas de negocio ni acceder directamente a SQLAlchemy.
+
+### 1. Crear la entidad de dominio
+
+Crea `domain/entities/product.py`. Hereda de `AuditableEntity` para obtener UUID, fechas de auditoría y borrado lógico:
+
+```python
+from dataclasses import dataclass
+
+from shared.domain.entities import AuditableEntity
+
+
+@dataclass(kw_only=True)
+class Product(AuditableEntity):
+    name: str
+```
+
+Agrega aquí invariantes y comportamiento propio del dominio; no importes FastAPI, Pydantic ni SQLAlchemy.
+
+### 2. Definir el puerto del repositorio
+
+Crea `domain/repositories/product_repository.py` y extiende el contrato CRUD común:
+
+```python
+from typing import Protocol
+
+from domain.entities.product import Product
+from shared.domain.repository_port import RepositoryPort
+
+
+class ProductRepositoryPort(RepositoryPort[Product], Protocol):
+    pass
+```
+
+Si la entidad necesita consultas adicionales, decláralas en este puerto. Así el servicio de aplicación depende del contrato, no del adaptador SQL.
+
+### 3. Crear el modelo y el adaptador SQL
+
+Crea `infrastructure/database/models/product_orm.py` con una clase SQLAlchemy basada en `shared.infrastructure.database.Base`. El ejemplo usa la tabla `products`, `id` UUID, `name` de hasta 200 caracteres, `created_on`, `updated_on` y `deleted`; este último es necesario para filtrar registros y hacer borrado lógico. Usa nombres de atributos alineados con los campos de la entidad para que el mapeo genérico de `SQLBaseRepository` funcione. Define explícitamente relaciones, índices y restricciones que requiera el esquema.
+
+Crea `infrastructure/database/repositories/product_repository.py`:
+
+```python
+from sqlalchemy.orm import Session
+
+from domain.entities.product import Product
+from domain.repositories.product_repository import ProductRepositoryPort
+from infrastructure.database.models.product_orm import ProductORM
+from shared.infrastructure.sql_repository import SQLBaseRepository
+
+
+class ProductRepository(SQLBaseRepository[Product, ProductORM], ProductRepositoryPort):
+    def __init__(self, db: Session) -> None:
+        super().__init__(db, Product, ProductORM, "Producto")
+```
+
+Sobrescribe `_to_orm`, `_to_domain` u operaciones del repositorio solo si el mapeo o las relaciones no son simples. Si agregas una restricción única que deba convertirse en conflicto `409`, clasifícala en `_integrity_conflict_messages`; otros errores de integridad se propagan.
+
+`ProductORM` debe importarse en `scripts/create_tables.py` y en `tests/conftest.py` para que SQLAlchemy registre el modelo en `Base.metadata` antes de crear las tablas de producción y de prueba, respectivamente.
+
+### 4. Definir los esquemas HTTP y el servicio
+
+Crea `infrastructure/api/schemas/product_schemas.py` con modelos Pydantic separados para creación, actualización y respuesta. La respuesta debe usar `ConfigDict(from_attributes=True)` y exponer solo campos públicos; no devuelvas automáticamente campos internos como `deleted`.
+
+Crea `application/services/product_service.py` y hereda de `BaseService[Product]`. Inyecta `ProductRepositoryPort` y `LoggerPort`, y pásalos al constructor base. Agrega métodos al servicio solo cuando haya reglas/casos de uso específicos; si esos métodos usan capacidades nuevas del repositorio, decláralas en el puerto.
+
+### 5. Proveer el servicio y construir el router
+
+En `infrastructure/api/dependencies.py`, agrega `get_product_service` para crear un `ProductRepository` con la sesión `get_db` y proporcionar el logger:
+
+```python
+def get_product_service(
+    db: Annotated[Session, Depends(get_db)],
+    logger: Annotated[LoggerPort, Depends(get_logger)],
+) -> ProductService:
+    return ProductService(ProductRepository(db), logger)
+```
+
+Crea `infrastructure/api/controllers/product_controller.py` y configura `create_generic_router`:
+
+```python
+from uuid import UUID
+
+from domain.entities.product import Product
+from infrastructure.api.dependencies import get_product_service
+from infrastructure.api.schemas.product_schemas import ProductCreate, ProductResponse, ProductUpdate
+from shared.infrastructure.generic_controller import create_generic_router
+
+
+def update_product(product_id: int | UUID, payload: ProductUpdate) -> Product:
+    if not isinstance(product_id, UUID):
+        raise TypeError("El ID de un producto debe ser UUID.")
+    return Product(id=product_id, name=payload.name)
+
+
+router = create_generic_router(
+    service_provider=get_product_service,
+    request_schema=ProductCreate,
+    entity_factory=lambda payload: Product(name=payload.name),
+    update_schema=ProductUpdate,
+    update_factory=update_product,
+    resource_name="Producto",
+    response_schema=ProductResponse,
+    entity_id_type=UUID,
+    prefix="/products",
+    tags=["Products"],
+)
+```
+
+El router genérico publica `POST /`, `GET /`, `GET /{entity_id}`, `PUT /{entity_id}` y `DELETE /{entity_id}`; las colecciones son paginadas. El `update_factory` recibe un ID tipado como `int | UUID`; la función del ejemplo verifica el tipo concreto del ID UUID antes de construir la entidad, igual que `update_role` en `role_controller.py`.
+
+Si el recurso necesita rutas o comportamientos HTTP especiales, define un `APIRouter` explícito en el controller y delega igualmente al servicio. No fuerces esas operaciones en la fábrica genérica.
+
+### 6. Montar el router y crear el esquema
+
+En `main.py`, importa el router y móntalo bajo el prefijo de versión:
+
+```python
+from infrastructure.api.controllers.product_controller import router as products_router
+
+app.include_router(products_router, prefix="/api/v1")
+```
+
+Verifica que aparezca en `/docs`. Con `DATABASE_URL` apuntando a la base correspondiente, ejecuta:
+
+```powershell
+python -m scripts.create_tables
+```
+
+`create_all` crea tablas nuevas, pero no migra ni modifica tablas existentes. Para cambios en una base ya desplegada, prepara y aplica una migración antes de habilitar el endpoint.
+
+### 7. Agregar pruebas
+
+Agrega pruebas unitarias para invariantes/esquemas y pruebas de integración para creación, listado paginado, lectura por ID, actualización, borrado lógico y errores relevantes. Las pruebas de integración existentes usan SQLite en memoria mediante `tests/conftest.py`; importa el modelo nuevo ahí si se requiere para que `Base.metadata.create_all` incluya la tabla. Ejecuta `pytest`, `ruff check .` y `mypy .` antes de dar por terminada la entidad.
 
 ## Base de datos
 
-La ruta `/health` funciona sin base de datos. Para los endpoints de roles y usuarios, configura `DATABASE_URL` antes de inicializar el esquema y ejecutar la API; no hay URL con credenciales por defecto. Para opciones de configuración de PostgreSQL, consulta [Configurar PostgreSQL](#configurar-postgresql).
+La ruta `/health` funciona sin base de datos. Para los endpoints de productos, roles y usuarios, configura `DATABASE_URL` antes de inicializar el esquema y ejecutar la API; no hay URL con credenciales por defecto. Para opciones de configuración de PostgreSQL, consulta [Configurar PostgreSQL](#configurar-postgresql).
 
 Como alternativa, puedes usar SQLite en PowerShell:
 
@@ -266,13 +419,13 @@ Como alternativa, puedes usar SQLite en PowerShell:
 $env:DATABASE_URL = "sqlite:///./app.db"
 ```
 
-Con `DATABASE_URL` configurada, crea las tablas `roles`, `users` y `user_roles`:
+Con `DATABASE_URL` configurada, crea las tablas `products`, `roles`, `users` y `user_roles`:
 
 ```powershell
 python -m scripts.create_tables
 ```
 
-`get_db()` abre y cierra una sesión por solicitud. Si las tablas ya existían antes de agregar los campos de usuario, actualízalas mediante una migración (por ejemplo, Alembic); `create_tables` no altera tablas existentes.
+`get_db()` abre y cierra una sesión por solicitud. `create_tables` crea tablas nuevas, pero no actualiza ni migra tablas existentes; aplica una migración cuando cambie un esquema ya desplegado.
 
 ## Entidad User
 
@@ -298,7 +451,7 @@ Si se omite `role_ids`, el usuario se crea sin roles. En `PUT`, envía un nuevo 
 python -m pytest -q
 ```
 
-Las pruebas están separadas por tipo: `tests/unit/` no toca la base de datos (entidades, esquemas, `BaseService`, router genérico, clasificador de integridad, manejadores HTTP —incluido el 500 JSON— y configuración de la base) y `tests/integration/` levanta la aplicación completa contra SQLite en memoria (salud, roles, usuarios y hash de contraseña).
+Las pruebas están separadas por tipo: `tests/unit/` no toca una base de datos externa (entidades, esquemas, `BaseService`, router genérico, clasificador de integridad, manejadores HTTP y configuración de la base) y `tests/integration/` levanta la aplicación completa contra SQLite en memoria (salud, productos, roles, usuarios y hash de contraseña).
 
 `tests/fakes.py` expone un único `InMemoryRepository` genérico que respeta el contrato de `RepositoryPort`. `tests/conftest.py` aporta las fixtures compartidas `engine`, `session_factory` y `client`; esta última sustituye `get_db` por la base en memoria y restaura los overrides al terminar cada prueba.
 
@@ -328,4 +481,4 @@ Mypy corre en modo `strict` con el plugin de Pydantic. Que el proyecto pase la c
 
 ## Estado actual
 
-Las entidades `Role` y `User` exponen creación, lectura paginada, actualización completa y eliminación lógica. La capa de autenticación está en curso: `AuthService.login` y los puertos `PasswordHasher` y `TokenServicePort` ya existen, pero todavía no hay implementación de `TokenServicePort`, endpoint de login ni pruebas del servicio. Las migraciones de base de datos tampoco están implementadas.
+Las entidades `Product`, `Role` y `User` exponen creación, lectura paginada, actualización completa y eliminación lógica. La autenticación incluye login JWT y dependencias separadas para JWT y API Key; las migraciones de base de datos no están implementadas y deben gestionarse fuera de `create_tables`.

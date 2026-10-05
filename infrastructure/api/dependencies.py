@@ -10,9 +10,11 @@ from application.ports.logger import LoggerPort
 from application.ports.password_hasher import PasswordHasher
 from application.ports.token_service import TokenServicePort
 from application.services.auth_service import AuthService
+from application.services.product_service import ProductService
 from application.services.role_service import RoleService
 from application.services.user_service import UserService
 from domain.repositories.user_repository import UserRepositoryPort
+from infrastructure.database.repositories.product_repository import ProductRepository
 from infrastructure.database.repositories.role_repository import RoleRepository
 from infrastructure.database.repositories.user_repository import UserRepository
 from infrastructure.logging.std_logger import StdLogger
@@ -30,6 +32,13 @@ def get_role_service(
     logger: Annotated[LoggerPort, Depends(get_logger)],
 ) -> RoleService:
     return RoleService(RoleRepository(db), logger)
+
+
+def get_product_service(
+    db: Annotated[Session, Depends(get_db)],
+    logger: Annotated[LoggerPort, Depends(get_logger)],
+) -> ProductService:
+    return ProductService(ProductRepository(db), logger)
 
 
 def get_user_repository(db: Annotated[Session, Depends(get_db)]) -> UserRepositoryPort:

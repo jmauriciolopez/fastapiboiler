@@ -148,7 +148,8 @@ def test_username_is_unique_among_active_users_and_reusable_after_deletion(
         json={**payload, "username": "ADA", "email": "otra@example.com"},
     )
     assert duplicated.status_code == 409
-    assert duplicated.json()["error"]["message"] == (
+    assert duplicated.json()["code"] == "conflict"
+    assert duplicated.json()["detail"] == (
         "Ya existe un usuario con ese nombre de usuario."
     )
 
