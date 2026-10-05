@@ -9,6 +9,7 @@ from domain.exceptions.auth_exceptions import (
     InvalidTokenException,
 )
 from shared.infrastructure.exceptions import register_exception_handlers
+from shared.infrastructure.problem_details import problem_response
 
 
 def register_api_exception_handlers(app: FastAPI) -> None:
@@ -16,29 +17,33 @@ def register_api_exception_handlers(app: FastAPI) -> None:
     register_exception_handlers(app)
 
     @app.exception_handler(AuthException)
-    def auth_exception_handler(_request: Request, exc: AuthException) -> JSONResponse:
-        return JSONResponse(
+    def auth_exception_handler(request: Request, exc: AuthException) -> JSONResponse:
+        return problem_response(
+            request,
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": {"code": "invalid_credentials", "message": exc.message}},
+            code="invalid_credentials",
+            detail=exc.message,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     @app.exception_handler(InvalidTokenException)
-    def invalid_token_handler(_request: Request, exc: InvalidTokenException) -> JSONResponse:
-        return JSONResponse(
+    def invalid_token_handler(request: Request, exc: InvalidTokenException) -> JSONResponse:
+        return problem_response(
+            request,
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": {"code": "invalid_token", "message": exc.message}},
+            code="invalid_token",
+            detail=exc.message,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     @app.exception_handler(InvalidAPIKeyException)
-    def invalid_api_key_handler(_request: Request, _exc: InvalidAPIKeyException) -> JSONResponse:
-        return JSONResponse(
+    def invalid_api_key_handler(
+        request: Request,
+        _exc: InvalidAPIKeyException,
+    ) -> JSONResponse:
+        return problem_response(
+            request,
             status_code=status.HTTP_403_FORBIDDEN,
-            content={
-                "error": {
-                    "code": "invalid_api_key",
-                    "message": "Falta una API Key válida.",
-                }
-            },
+            code="invalid_api_key",
+            detail="Falta una API Key válida.",
         )

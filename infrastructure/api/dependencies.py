@@ -6,12 +6,12 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from application.ports.logger import LoggerPort
 from application.ports.password_hasher import PasswordHasher
 from application.ports.token_service import TokenServicePort
 from application.services.auth_service import AuthService
 from application.services.role_service import RoleService
 from application.services.user_service import UserService
-from application.ports.logger import LoggerPort
 from domain.repositories.user_repository import UserRepositoryPort
 from infrastructure.database.repositories.role_repository import RoleRepository
 from infrastructure.database.repositories.user_repository import UserRepository
@@ -19,6 +19,10 @@ from infrastructure.logging.std_logger import StdLogger
 from infrastructure.security.password_hasher import Argon2PasswordHasher
 from infrastructure.security.token_service import JwtTokenService
 from shared.infrastructure.database import get_db
+
+
+def get_logger() -> LoggerPort:
+    return StdLogger(name="HexagonalApp")
 
 
 def get_role_service(
@@ -41,10 +45,6 @@ def get_token_service() -> TokenServicePort:
     if not secret_key:
         raise RuntimeError("JWT_SECRET_KEY debe configurarse para emitir tokens.")
     return JwtTokenService(secret_key)
-
-
-def get_logger() -> LoggerPort:
-    return StdLogger(name="HexagonalApp")
 
 
 def get_user_service(

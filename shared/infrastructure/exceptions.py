@@ -1,7 +1,9 @@
 import logging
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 
 from shared.domain.exceptions import (
     DomainConflictException,
@@ -9,21 +11,24 @@ from shared.domain.exceptions import (
     DomainValidationException,
     EntityNotFoundException,
 )
+from shared.infrastructure.problem_details import problem_response
 
 logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     def domain_error_handler(
-        _request: Request,
+        request: Request,
         exc: DomainException,
         *,
         status_code: int,
         code: str,
     ) -> JSONResponse:
-        return JSONResponse(
+        return problem_response(
+            request,
             status_code=status_code,
-            content={"error": {"code": code, "message": exc.message}},
+            code=code,
+            detail=exc.message,
         )
 
     @app.exception_handler(EntityNotFoundException)
@@ -62,15 +67,44 @@ def register_exception_handlers(app: FastAPI) -> None:
             code="domain_error",
         )
 
+    @app.exception_handler(HTTPException)
+    def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        detail = exc.detail if isinstance(exc.detail, str) else "La solicitud no pudo procesarse."
+        return problem_response(
+            request,
+            status_code=exc.status_code,
+            code="http_error",
+            detail=detail,
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    def request_validation_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        errors = [
+            {
+                "loc": error["loc"],
+                "msg": error["msg"],
+                "type": error["type"],
+            }
+            for error in exc.errors()
+        ]
+        return problem_response(
+            request,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code="request_validation_error",
+            detail="La solicitud contiene datos inválidos.",
+            extensions={"errors": errors},
+        )
+
     @app.exception_handler(Exception)
-    def unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled exception", exc_info=exc)
-        return JSONResponse(
+        return problem_response(
+            request,
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": {
-                    "code": "internal_error",
-                    "message": "Error interno del servidor.",
-                }
-            },
+            code="internal_error",
+            detail="Error interno del servidor.",
         )

@@ -1,12 +1,12 @@
 """Pruebas unitarias de la clase base de servicios."""
 
 from shared.application.base_service import BaseService
-from tests.fakes import InMemoryRepository
+from tests.fakes import FakeLogger, InMemoryRepository
 
 
 def test_base_service_delegates_domain_objects_to_repository() -> None:
     repository: InMemoryRepository[str] = InMemoryRepository()
-    service = BaseService(repository)
+    service = BaseService(repository, FakeLogger())
 
     assert service.create("example") == "example"
     assert service.get_by_id(1) == "example"

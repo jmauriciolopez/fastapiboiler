@@ -42,6 +42,8 @@ El paquete `psycopg[binary]` ya está declarado en `requirements.txt`. También 
 
 La autenticación JWT usa el encabezado `Authorization: Bearer <token>` y requiere `JWT_SECRET_KEY`. Por separado, las rutas que se protejan con `Depends(get_valid_api_key)` requieren `X-API-Key: <clave>` y `API_KEY`. La dependencia `get_valid_api_key` está disponible en `infrastructure.api.security`; actualmente no está aplicada a ninguna ruta. No se exige que ambas credenciales se envíen juntas.
 
+Los errores HTTP se responden con `application/problem+json`, siguiendo RFC 9457 (Problem Details). El objeto incluye `type`, `title`, `status`, `detail` e `instance`; `code` es una extensión estable de la API. Los errores de validación agregan una extensión `errors` con ubicación y tipo, sin incluir los valores recibidos. Las excepciones inesperadas se registran en el servidor y responden con un detalle genérico.
+
 Una vez creada la base de datos, inicializa las tablas y luego inicia la API:
 
 ```powershell

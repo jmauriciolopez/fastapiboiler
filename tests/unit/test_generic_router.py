@@ -6,14 +6,19 @@ from fastapi.testclient import TestClient
 from shared.application.base_service import BaseService
 from shared.infrastructure.exceptions import register_exception_handlers
 from shared.infrastructure.generic_controller import create_generic_router
-from tests.fakes import InMemoryRepository, PayloadSchema, ValidatedPayloadSchema
+from tests.fakes import (
+    FakeLogger,
+    InMemoryRepository,
+    PayloadSchema,
+    ValidatedPayloadSchema,
+)
 
 
 def test_generic_router_validates_request_schema_and_creates_domain_object() -> None:
     repository = InMemoryRepository[dict[str, str]]()
 
     def get_service() -> BaseService[dict[str, str]]:
-        return BaseService(repository)
+        return BaseService(repository, FakeLogger())
 
     router = create_generic_router(
         get_service,

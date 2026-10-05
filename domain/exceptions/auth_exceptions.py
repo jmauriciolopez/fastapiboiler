@@ -15,5 +15,8 @@ class InvalidTokenException(AuthException):
         super().__init__(message)
 
 
-class InvalidAPIKeyException(Exception):
+class InvalidAPIKeyException(AuthException):
     """La API Key falta o no coincide con la clave configurada."""
+
+    def __init__(self, message: str = "Invalid or missing API key") -> None:
+        super().__init__(message)

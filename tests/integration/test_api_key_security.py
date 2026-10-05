@@ -40,9 +40,12 @@ def test_api_key_dependency_rejects_missing_or_invalid_key(
     response = api_key_client.get("/protected", headers=headers)
 
     assert response.status_code == 403
+    assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
-        "error": {
-            "code": "invalid_api_key",
-            "message": "Falta una API Key válida.",
-        }
+        "type": "about:blank",
+        "title": "Forbidden",
+        "status": 403,
+        "detail": "Falta una API Key válida.",
+        "instance": "/protected",
+        "code": "invalid_api_key",
     }

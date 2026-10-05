@@ -64,8 +64,14 @@ def test_login_rejects_a_wrong_password(client: TestClient) -> None:
     response = _login(client, "ada", "clave-incorrecta")
 
     assert response.status_code == 401
+    assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
-        "error": {"code": "invalid_credentials", "message": "Invalid username or password"}
+        "type": "about:blank",
+        "title": "Unauthorized",
+        "status": 401,
+        "detail": "Invalid username or password",
+        "instance": "/api/v1/auth/login",
+        "code": "invalid_credentials",
     }
 
 
@@ -73,21 +79,21 @@ def test_login_rejects_an_unknown_username(client: TestClient) -> None:
     response = _login(client, "nadie", VALID_PASSWORD)
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_credentials"
+    assert response.json()["code"] == "invalid_credentials"
 
 
 def test_current_user_requires_a_token(client: TestClient) -> None:
     response = client.get("/api/v1/auth/me")
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_token"
+    assert response.json()["code"] == "invalid_token"
 
 
 def test_current_user_rejects_a_token_that_is_not_valid(client: TestClient) -> None:
     response = client.get("/api/v1/auth/me", headers=_authorization_header("token-invalido"))
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_token"
+    assert response.json()["code"] == "invalid_token"
 
 
 def test_current_user_rejects_a_token_of_a_deleted_user(client: TestClient) -> None:
@@ -99,4 +105,4 @@ def test_current_user_rejects_a_token_of_a_deleted_user(client: TestClient) -> N
     response = client.get("/api/v1/auth/me", headers=_authorization_header(token))
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_token"
+    assert response.json()["code"] == "invalid_token"

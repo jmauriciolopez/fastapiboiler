@@ -4,16 +4,36 @@ Un único repositorio en memoria, genérico sobre el tipo de entidad, evita
 duplicar un fake por cada tipo que se quiera probar.
 """
 
-from typing import ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
 
+from application.ports.logger import LoggerPort
 from shared.domain.exceptions import EntityNotFoundException
 from shared.domain.pagination import PaginatedResult
 from shared.domain.repository_port import RepositoryPort
 
 T = TypeVar("T")
+
+
+class FakeLogger(LoggerPort):
+    """Logger sin efectos secundarios para pruebas."""
+
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        pass
 
 
 class InMemoryRepository(RepositoryPort[T]):
