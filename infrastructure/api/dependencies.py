@@ -1,6 +1,5 @@
 """Composition root: construye servicios y adaptadores por solicitud."""
 
-import os
 from typing import Annotated
 
 from fastapi import Depends
@@ -20,6 +19,7 @@ from infrastructure.database.repositories.user_repository import UserRepository
 from infrastructure.logging.std_logger import StdLogger
 from infrastructure.security.password_hasher import Argon2PasswordHasher
 from infrastructure.security.token_service import JwtTokenService
+from shared.infrastructure.config.settings import settings
 from shared.infrastructure.persistence.database import get_db
 
 
@@ -50,7 +50,7 @@ def get_password_hasher() -> PasswordHasher:
 
 
 def get_token_service() -> TokenServicePort:
-    secret_key = os.getenv("JWT_SECRET_KEY")
+    secret_key = settings.jwt_secret_key
     if not secret_key:
         raise RuntimeError("JWT_SECRET_KEY debe configurarse para emitir tokens.")
     return JwtTokenService(secret_key)

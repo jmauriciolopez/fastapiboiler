@@ -1,7 +1,6 @@
 """Dependencias de seguridad para las rutas protegidas por token."""
 
 import hmac
-import os
 from typing import Annotated
 
 from fastapi import Depends, Security
@@ -15,6 +14,7 @@ from domain.exceptions.auth_exceptions import (
 )
 from domain.repositories.user_repository import UserRepositoryPort
 from infrastructure.api.dependencies import get_token_service, get_user_repository
+from shared.infrastructure.config.settings import settings
 
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="JWT")
 api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False, scheme_name="APIKey")
@@ -24,7 +24,7 @@ def get_valid_api_key(
     api_key: Annotated[str | None, Security(api_key_scheme)],
 ) -> None:
     """Valida el encabezado X-API-Key contra la clave configurada en API_KEY."""
-    configured_api_key = os.getenv("API_KEY")
+    configured_api_key = settings.api_key
     if not configured_api_key:
         raise RuntimeError("API_KEY debe configurarse para usar la autenticación por API Key.")
     if api_key is None or not hmac.compare_digest(api_key, configured_api_key):

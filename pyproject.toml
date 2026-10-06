@@ -9,7 +9,11 @@ python_version = "3.12"
 strict = true
 explicit_package_bases = true
 plugins = ["pydantic.mypy"]
-exclude = ["^\\.venv/", "^build/", "^alembic/"]
+exclude = [  "^vent/",
+    "^venv/",
+    "^\\.venv/",
+    "^build/",
+    "^alembic/"]
 
 [[tool.mypy.overrides]]
 module = ["passlib.*", "jose.*"]

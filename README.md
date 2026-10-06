@@ -27,7 +27,7 @@ python -m pip install -r requirements.txt
 ```powershell
 uvicorn main:app --reload
 ```
-
+fastapi dev main.py
 La API estará disponible en <http://127.0.0.1:8000>. La documentación interactiva de Swagger UI está en <http://127.0.0.1:8000/docs> y la especificación OpenAPI en <http://127.0.0.1:8000/openapi.json>.
 
 ## Ejecutar con Docker
@@ -58,9 +58,53 @@ DATABASE_URL=postgresql+psycopg://...
 
 El paquete `psycopg[binary]` ya está declarado en `requirements.txt`. También se aceptan URLs con esquema `postgres://` o `postgresql://`; la configuración las normaliza al driver `postgresql+psycopg`. Mantén las credenciales reales fuera del código y no agregues el archivo `.env` al control de versiones.
 
-La autenticación JWT usa el encabezado `Authorization: Bearer <token>` y requiere `JWT_SECRET_KEY`. Por separado, las rutas que se protejan con `Depends(get_valid_api_key)` requieren `X-API-Key: <clave>` y `API_KEY`. La dependencia `get_valid_api_key` está disponible en `infrastructure.api.security`; actualmente no está aplicada a ninguna ruta. No se exige que ambas credenciales se envíen juntas.
+La configuración central también carga `JWT_SECRET_KEY` y `API_KEY` desde el entorno o el mismo `.env`. Añádelas como asignaciones `CLAVE=valor` (no solo el nombre de la variable); por ejemplo:
+
+```dotenv
+JWT_SECRET_KEY=...
+API_KEY=...
+```
+
+Reinicia la aplicación después de cambiar el `.env`, porque los valores se cargan al iniciar el proceso. La autenticación JWT usa el encabezado `Authorization: Bearer <token>` y requiere `JWT_SECRET_KEY`. Por separado, las rutas que se protejan con `Depends(get_valid_api_key)` requieren `X-API-Key: <clave>` y `API_KEY`. La dependencia `get_valid_api_key` está disponible en `infrastructure.api.security`; actualmente no está aplicada a ninguna ruta. No se exige que ambas credenciales se envíen juntas.
 
 Los errores HTTP se responden con `application/problem+json`, siguiendo RFC 9457 (Problem Details). El objeto incluye `type`, `title`, `status`, `detail` e `instance`; `code` es una extensión estable de la API. Los errores de validación agregan una extensión `errors` con ubicación y tipo, sin incluir los valores recibidos. Las excepciones inesperadas se registran en el servidor y responden con un detalle genérico.
+
+## MCP para GitHub Copilot en VS Code
+
+El archivo `.vscode/mcp.json` registra el servidor local
+`controller-builder` para que Copilot pueda usar sus herramientas MCP. La
+configuración inicia el servidor instalado en
+`D:\Code\python\mcp\.venv\Scripts\python.exe`; no agrega un cliente MCP a esta
+API ni cambia sus dependencias.
+
+Abre este proyecto en VS Code y, si se solicita, acepta iniciar el servidor
+MCP. En Copilot Chat, habilita `controller-builder / list_entities` desde el
+selector de herramientas y pásale este argumento para listar las entidades de
+este proyecto:
+
+```json
+{"project_root":"D:\\Code\\python\\demo"}
+```
+
+También puedes pedirle a Copilot que genere el scaffolding usando
+`generate_controller` o `generate_pending`. Para esas herramientas, ejecuta
+primero con `dry_run=true` para revisar los cambios; la escritura requiere
+invocarlas explícitamente con `dry_run=false`. La herramienta
+`reflect_database` también está disponible si el entorno MCP tiene instalado
+el extra de base de datos y el driver correspondiente.
+
+Para usar las herramientas sin Copilot, conéctate al servidor desde un cliente
+MCP, por ejemplo MCP Inspector, con esta configuración `stdio`:
+
+| Campo | Valor |
+| --- | --- |
+| Command | `D:\Code\python\mcp\.venv\Scripts\python.exe` |
+| Arguments | `-m mcp_controller_builder.server` |
+| Working directory | `D:\Code\python\mcp` |
+
+Después de conectarte, selecciona `list_entities` y envía el JSON anterior.
+El servidor habla el protocolo MCP; no hay un comando de PowerShell que invoque
+directamente `list_entities` sin un cliente MCP.
 
 Una vez creada la base de datos, inicializa las tablas y luego inicia la API:
 

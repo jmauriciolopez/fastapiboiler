@@ -8,11 +8,12 @@ from fastapi.testclient import TestClient
 
 from infrastructure.api.exceptions import register_api_exception_handlers
 from infrastructure.api.security import get_valid_api_key
+from shared.infrastructure.config.settings import settings
 
 
 @pytest.fixture
 def api_key_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setenv("API_KEY", "test-api-key")
+    monkeypatch.setattr(settings, "api_key", "test-api-key")
     app = FastAPI()
     register_api_exception_handlers(app)
 

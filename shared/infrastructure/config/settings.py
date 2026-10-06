@@ -10,5 +10,7 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 3600
     db_pool_timeout: int = 30
     db_echo: bool = False
+    jwt_secret_key: str | None = None
+    api_key: str | None = None
 
 settings = Settings()

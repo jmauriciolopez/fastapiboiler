@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "controller-builder": {
+      "type": "stdio",
+      "command": "D:\\Code\\python\\mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "mcp_controller_builder.server"],
+      "cwd": "D:\\Code\\python\\mcp"
+    }
+  }
+}

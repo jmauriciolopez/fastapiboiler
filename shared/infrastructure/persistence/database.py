@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -75,3 +77,4 @@ def session_scope() -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+        

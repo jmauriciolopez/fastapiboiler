@@ -15,6 +15,7 @@ from infrastructure.database.models.product_orm import ProductORM  # noqa: F401
 from infrastructure.database.models.role_orm import RoleORM  # noqa: F401
 from infrastructure.database.models.user_orm import UserORM  # noqa: F401
 from main import app
+from shared.infrastructure.config.settings import settings
 from shared.infrastructure.persistence.database import Base, get_db
 
 
@@ -45,7 +46,7 @@ def client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[TestClient, None, None]:
     """Cliente HTTP con ``get_db`` apuntando a la base en memoria."""
-    monkeypatch.setenv("JWT_SECRET_KEY", "clave-de-prueba")
+    monkeypatch.setattr(settings, "jwt_secret_key", "clave-de-prueba")
 
     def override_get_db() -> Generator[Session, None, None]:
         db = session_factory()
