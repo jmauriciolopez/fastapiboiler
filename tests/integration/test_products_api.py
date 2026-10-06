@@ -38,6 +38,18 @@ def test_product_controller_exposes_generic_crud(
     assert updated.status_code == 200
     assert updated.json()["name"] == "Mechanical keyboard"
 
+    patched = client.patch(f"/api/v1/products/{product_id}", json={})
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Mechanical keyboard"
+
+    patched = client.patch(
+        f"/api/v1/products/{product_id}",
+        json={"name": "Compact keyboard"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Compact keyboard"
+    assert client.patch(f"/api/v1/products/{product_id}", json={"name": None}).status_code == 422
+
     deleted = client.delete(f"/api/v1/products/{product_id}")
     assert deleted.status_code == 204
     assert client.get(f"/api/v1/products/{product_id}").status_code == 404

@@ -15,6 +15,10 @@ class RoleUpdate(RoleBase):
     pass
 
 
+class RolePatch(BaseModel):
+    name: str = Field(default="", min_length=1, max_length=80)
+
+
 class RoleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

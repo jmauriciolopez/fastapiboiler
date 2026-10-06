@@ -15,6 +15,10 @@ class ProductUpdate(ProductBase):
     pass
 
 
+class ProductPatch(BaseModel):
+    name: str = Field(default="", min_length=1, max_length=200)
+
+
 class ProductResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -9,6 +9,7 @@ from shared.infrastructure.generic_controller import create_generic_router
 from tests.fakes import (
     FakeLogger,
     InMemoryRepository,
+    PayloadPatchSchema,
     PayloadSchema,
     ValidatedPayloadSchema,
 )
@@ -28,6 +29,11 @@ def test_generic_router_validates_request_schema_and_creates_domain_object() -> 
         lambda entity_id, payload: payload.model_dump(),
         "recurso",
         PayloadSchema,
+        patch_schema=PayloadPatchSchema,
+        patch_factory=lambda entity_id, current, payload: {
+            **current,
+            **payload.model_dump(exclude_unset=True),
+        },
     )
     generic_app = FastAPI()
     register_exception_handlers(generic_app)
@@ -63,3 +69,43 @@ def test_generic_router_validates_request_schema_and_creates_domain_object() -> 
     }
     assert client.get("/resources/1").status_code == 404
     assert client.put("/resources/1", json={"name": "again"}).status_code == 404
+    assert client.patch("/resources/1", json={"name": "again"}).status_code == 404
+
+
+def test_generic_router_patch_only_updates_fields_sent() -> None:
+    repository = InMemoryRepository[dict[str, str]]()
+
+    def get_service() -> BaseService[dict[str, str]]:
+        return BaseService(repository, FakeLogger())
+
+    router = create_generic_router(
+        get_service,
+        PayloadSchema,
+        lambda payload: {"name": payload.name, "description": "preserved"},
+        PayloadSchema,
+        lambda _entity_id, payload: payload.model_dump(),
+        "recurso",
+        PayloadSchema,
+        patch_schema=PayloadPatchSchema,
+        patch_factory=lambda _entity_id, current, payload: {
+            **current,
+            **payload.model_dump(exclude_unset=True),
+        },
+    )
+    generic_app = FastAPI()
+    register_exception_handlers(generic_app)
+    generic_app.include_router(router, prefix="/resources")
+    client = TestClient(generic_app)
+
+    created = client.post("/resources/", json={"name": "original"})
+    assert created.status_code == 201
+    patched = client.patch("/resources/1", json={"name": "changed"})
+
+    assert patched.status_code == 200
+    assert patched.json() == {"name": "changed"}
+    assert repository.get_by_id(1) == {
+        "name": "changed",
+        "description": "preserved",
+    }
+    assert client.patch("/resources/1", json={}).json() == patched.json()
+    assert client.patch("/resources/1", json={"name": None}).status_code == 422

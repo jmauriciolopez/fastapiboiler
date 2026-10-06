@@ -13,6 +13,7 @@ from shared.domain.pagination import PaginatedResult
 M = TypeVar("M")
 RequestSchema = TypeVar("RequestSchema", bound=BaseModel)
 UpdateSchema = TypeVar("UpdateSchema", bound=BaseModel)
+PatchSchema = TypeVar("PatchSchema", bound=BaseModel)
 ResponseItem = TypeVar("ResponseItem")
 
 
@@ -61,7 +62,12 @@ def create_generic_router(
     tags: list[str | Enum] | None = None,
     default_page_size: int = 20,
     max_page_size: int = 100,
+    patch_schema: type[PatchSchema] | None = None,
+    patch_factory: Callable[[int | UUID, M, PatchSchema], M] | None = None,
 ) -> APIRouter:
+    if (patch_schema is None) != (patch_factory is None):
+        raise ValueError("patch_schema y patch_factory deben configurarse juntos.")
+
     router = APIRouter(prefix=prefix, tags=tags)
     paginated_response_schema = _create_paginated_response_schema(response_schema)
 
@@ -116,6 +122,34 @@ def create_generic_router(
         summary=f"Actualizar un {resource_name}",
         response_model=response_schema,
     )
+
+    if patch_schema is not None and patch_factory is not None:
+
+        def patch(
+            entity_id: int | UUID,
+            payload: PatchSchema,
+            service: BaseService[M] = Depends(service_provider),  # noqa: B008
+        ) -> M:
+            current = service.get_by_id(entity_id)
+            if not payload.model_fields_set:
+                return current
+            return service.update(
+                entity_id,
+                patch_factory(entity_id, current, payload),
+            )
+
+        _with_parameter_types(
+            patch,
+            {"entity_id": entity_id_type, "payload": patch_schema},
+        )
+        router.add_api_route(
+            "/{entity_id}",
+            patch,
+            methods=["PATCH"],
+            status_code=status.HTTP_200_OK,
+            summary=f"Actualizar parcialmente un {resource_name}",
+            response_model=response_schema,
+        )
 
     def soft_delete(
         entity_id: int | UUID,

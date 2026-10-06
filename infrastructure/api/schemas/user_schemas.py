@@ -32,6 +32,14 @@ class UserUpdate(UserRoleIdsMixin):
     password: str | None = Field(default=None, min_length=8, max_length=128, repr=False)
 
 
+class UserPatch(UserRoleIdsMixin):
+    username: str = Field(default="", min_length=1, max_length=150)
+    email: EmailStr = Field(default="")
+    phone: str = Field(default="", min_length=1, max_length=32)
+    status: UserStatus = Field(default=UserStatus.PENDING)
+    password: str | None = Field(default=None, min_length=8, max_length=128, repr=False)
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -7,7 +7,7 @@ duplicar un fake por cada tipo que se quiera probar.
 from typing import Any, ClassVar, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from application.ports.logger import LoggerPort
 from shared.domain.exceptions import EntityNotFoundException
@@ -89,6 +89,12 @@ class PayloadSchema(BaseModel):
     """Esquema de respuesta mínimo para las pruebas del router genérico."""
 
     name: str
+
+
+class PayloadPatchSchema(BaseModel):
+    """Esquema parcial usado para comprobar las rutas PATCH genéricas."""
+
+    name: str = Field(default="")
 
 
 class ValidatedPayloadSchema(BaseModel):

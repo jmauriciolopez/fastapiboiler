@@ -126,16 +126,19 @@ Si ya tienes una base de datos creada con el esquema anterior, aplica una migrac
 | `GET` | `/api/v1/roles/?limit=20&offset=0` | Lista roles activos con paginación. |
 | `GET` | `/api/v1/roles/{role_id}` | Obtiene un rol o responde `404` si no existe. |
 | `PUT` | `/api/v1/roles/{role_id}` | Actualiza el nombre del rol. |
+| `PATCH` | `/api/v1/roles/{role_id}` | Actualiza solo los campos enviados del rol. |
 | `DELETE` | `/api/v1/roles/{role_id}` | Marca el rol como eliminado; responde `204`. |
 | `POST` | `/api/v1/products/` | Crea un producto. |
 | `GET` | `/api/v1/products/?limit=20&offset=0` | Lista productos activos con paginación. |
 | `GET` | `/api/v1/products/{product_id}` | Obtiene un producto o responde `404` si no existe. |
 | `PUT` | `/api/v1/products/{product_id}` | Actualiza el nombre del producto. |
+| `PATCH` | `/api/v1/products/{product_id}` | Actualiza solo los campos enviados del producto. |
 | `DELETE` | `/api/v1/products/{product_id}` | Marca el producto como eliminado; responde `204`. |
 | `POST` | `/api/v1/users/` | Crea un usuario; recibe contraseña y la persiste como hash Argon2. |
 | `GET` | `/api/v1/users/?limit=20&offset=0` | Lista usuarios activos con paginación. |
 | `GET` | `/api/v1/users/{user_id}` | Obtiene un usuario y sus roles activos. |
 | `PUT` | `/api/v1/users/{user_id}` | Actualiza el usuario, roles y opcionalmente su contraseña. |
+| `PATCH` | `/api/v1/users/{user_id}` | Actualiza parcialmente los campos enviados del usuario. |
 | `DELETE` | `/api/v1/users/{user_id}` | Marca el usuario como eliminado; responde `204`. |
 
 ## Estructura actual
@@ -427,7 +430,7 @@ router = create_generic_router(
 )
 ```
 
-El router genérico publica `POST /`, `GET /`, `GET /{entity_id}`, `PUT /{entity_id}` y `DELETE /{entity_id}`; las colecciones son paginadas. El `update_factory` recibe un ID tipado como `int | UUID`; la función del ejemplo verifica el tipo concreto del ID UUID antes de construir la entidad, igual que `update_role` en `role_controller.py`.
+El router genérico publica `POST /`, `GET /`, `GET /{entity_id}`, `PUT /{entity_id}`, `PATCH /{entity_id}` y `DELETE /{entity_id}`; las colecciones son paginadas. `PUT` sigue siendo reemplazo completo. Para habilitar PATCH, configura juntos `patch_schema` y `patch_factory`: el factory recibe el ID, la entidad actual y el schema con los campos enviados, y debe devolver la entidad combinada. Los campos omitidos se conservan; un cuerpo vacío responde con el recurso actual sin escribir cambios. `update_factory` recibe un ID tipado como `int | UUID`; la función del ejemplo verifica el tipo concreto del ID UUID antes de construir la entidad, igual que `update_role` en `role_controller.py`.
 
 Si el recurso necesita rutas o comportamientos HTTP especiales, define un `APIRouter` explícito en el controller y delega igualmente al servicio. No fuerces esas operaciones en la fábrica genérica.
 
@@ -475,7 +478,9 @@ python -m scripts.create_tables
 
 La API recibe `password` al crear o actualizar, lo transforma con Argon2 en el servidor y lo persiste únicamente en la columna `password_hash`. El campo de dominio se llama `hashed_password` y las respuestas nunca exponen ni `password` ni `hashed_password`. Los usuarios nuevos comienzan en estado `pending`; los estados disponibles son `pending`, `active`, `inactive` y `blocked`. Cada usuario puede asociarse a varios roles existentes y activos mediante `role_ids`. Los emails activos son únicos; si una cuenta se elimina lógicamente, su email puede reutilizarse.
 
-Ejemplo de creación:
+### POST `/api/v1/users/`: recorrido de creación
+
+Ejemplo de body:
 
 ```json
 {
@@ -487,7 +492,155 @@ Ejemplo de creación:
 }
 ```
 
-Si se omite `role_ids`, el usuario se crea sin roles. En `PUT`, envía un nuevo `password` para cambiar la credencial; si se omite o es `null`, se conserva el hash actual. Los roles inexistentes o eliminados generan `404`; los correos duplicados, `409`.
+Recorrido para seguir durante un debug:
+
+1. `infrastructure/api/controllers/user_controller.py`, `create_user`: FastAPI
+   valida el body con `UserCreate` (`infrastructure/api/schemas/user_schemas.py`)
+   y resuelve `get_user_service` mediante `Depends`.
+2. `infrastructure/api/dependencies.py`, `get_user_service`: compone los
+   adaptadores por request: `get_user_repository` crea `UserRepository` con la
+   sesión de `get_db`, `get_password_hasher` crea `Argon2PasswordHasher` y
+   `get_logger` crea `StdLogger`.
+3. `create_user` pasa `payload.model_dump()` a
+   `application/services/user_service.py`, `UserService.create_user`. El
+   servicio convierte la contraseña a hash, obtiene los roles activos mediante
+   `UserRepositoryPort.get_active_roles`, y construye la entidad de dominio
+   `User` con estado `PENDING`.
+4. `UserService.create_user` llama `self.create(user)`, método heredado de
+   `shared/application/base_service.py`, `BaseService`. Este registra el inicio
+   y resultado, y delega en `repository.save`.
+5. `infrastructure/database/repositories/user_repository.py`,
+   `UserRepository`, especializa el guardado: `_to_orm` construye `UserORM` y
+   resuelve los `RoleORM` asociados. `SQLBaseRepository.save` (clase base)
+   agrega el ORM a la sesión, hace commit y refresh, y llama `_to_domain`.
+   `UserRepository._to_domain` transforma el ORM y sus roles de nuevo a la
+   entidad de dominio.
+6. FastAPI serializa el resultado con `UserResponse` y responde `201`. Ese
+   schema expone `roles`, pero no `password` ni `hashed_password`.
+
+Si se omite `role_ids` al crear, el schema usa una lista vacía y el usuario se
+crea sin roles. El cliente no puede elegir el estado inicial: el servicio fija
+`PENDING`.
+
+### PUT `/api/v1/users/{user_id}`: recorrido de actualización
+
+Ejemplo de body completo:
+
+```json
+{
+  "username": "Ada Byron",
+  "email": "ada@example.com",
+  "phone": "+1-555-0100",
+  "status": "active",
+  "role_ids": ["UUID-de-un-rol"],
+  "password": null
+}
+```
+
+Recorrido para seguir durante un debug:
+
+1. `user_controller.py`, `update_user`: FastAPI valida el UUID y el body con
+   `UserUpdate`; el controlador delega en
+   `UserService.update_user(user_id, **payload.model_dump())`. PUT usa un schema
+   de actualización completa, no el router genérico.
+2. `UserService.update_user` obtiene el registro actual con
+   `self.get_by_id(user_id)`, heredado de `BaseService`; esto permite conservar
+   el hash cuando `password` es `None`.
+3. El servicio hashea una contraseña nueva si se envió una distinta de `None`,
+   busca los roles activos indicados y construye una nueva entidad `User` con
+   los datos completos del body más el hash conservado o actualizado.
+4. `self.update(user_id, user)`, también heredado de `BaseService`, delega en
+   `UserRepository.update`. Este método está sobrescrito en `UserRepository`
+   porque `User` tiene una relación de roles que requiere sincronización
+   específica. Busca el usuario activo, carga los `RoleORM`, asigna los campos
+   (incluidos roles y hash), actualiza `updated_on`, hace commit y refresh, y
+   devuelve la entidad mediante `_to_domain`.
+5. La respuesta vuelve como `UserResponse`; no se devuelven el password ni su
+   hash.
+
+### PATCH `/api/v1/users/{user_id}`: recorrido parcial y cambio solo de contraseña
+
+PATCH usa `UserPatch`; cada campo puede omitirse. Para cambiar únicamente la
+contraseña, el body es:
+
+```json
+{
+  "password": "nueva-clave-segura"
+}
+```
+
+El recorrido es:
+
+1. `user_controller.py`, `patch_user`, obtiene el usuario actual con
+   `service.get_by_id(user_id)`. Si el body está vacío (`model_fields_set` sin
+   campos), devuelve ese usuario sin ejecutar el update.
+2. Para un body no vacío, `payload.model_dump(exclude_unset=True)` conserva
+   solo las claves que realmente llegaron. El controlador completa los demás
+   argumentos de `update_user` con los valores actuales: username, email,
+   teléfono, estado y los IDs de roles actuales.
+3. Si solo llegó `password`, el servicio recibe los datos actuales completos,
+   los mismos roles y la contraseña nueva. `UserService.update_user` la hashea
+   con `PasswordHasher`; no cambia username, email, teléfono, estado ni roles.
+4. El servicio delega en `BaseService.update` y este en
+   `UserRepository.update`, que persiste todos los campos ya combinados con el
+   hash nuevo. La respuesta sigue siendo `UserResponse`, que nunca incluye la
+   contraseña ni el hash.
+
+La contraseña debe tener entre 8 y 128 caracteres. Si se envía `null`, se
+interpreta como no cambiarla y se conserva el hash actual. Si se omite, también
+se conserva. `role_ids` solo se reemplaza cuando se incluye explícitamente en
+el body; `role_ids: []` quita todos los roles, mientras que omitir el campo
+mantiene los actuales.
+
+**Clases base usadas:** `UserService` hereda `BaseService[User]` y reutiliza
+`create`, `get_by_id` y `update` para logging y delegación al puerto. `UserRepository`
+implementa `UserRepositoryPort` y hereda `SQLBaseRepository[User, UserORM]`;
+reutiliza la conversión/consulta/commit de la base en las operaciones comunes,
+pero personaliza la conversión ORM-dominio y el `update` para tratar roles.
+En particular, POST sí usa `SQLBaseRepository.save`; PUT **no** llama
+`SQLBaseRepository.update`: `UserRepository.update` reemplaza esa operación y
+usa directamente sus helpers heredados `_get_active_orm_entity`, `_commit` y
+`_handle_integrity_error` a través de `_commit`.
+`UserController` es un `APIRouter` explícito: no usa `create_generic_router`,
+porque creación, contraseña, roles y respuesta de usuario necesitan lógica
+propia.
+
+**Detalles que afectan la depuración:**
+
+- El `UserRepositoryPort` define las operaciones adicionales `get_active_roles`
+  y `get_by_username`; la implementación concreta está en `UserRepository`.
+- `SQLBaseRepository._commit` revierte la sesión ante errores. Los índices
+  parciales de email y username se relacionan con
+  `_integrity_conflict_messages` de `UserRepository`; conflictos conocidos se
+  convierten en `DomainConflictException` y el manejador HTTP los responde como
+  `409`.
+- Los UUID de roles inexistentes o eliminados producen `EntityNotFoundException`
+  (`404`). Los errores de validación de `UserCreate`, `UserUpdate` y `UserPatch`
+  responden `422`.
+- En PUT, `password` omitido o `null` conserva el hash existente. `role_ids`
+  tiene valor por defecto `[]`: si se omite, PUT elimina todas las asociaciones
+  de roles. Los campos `username`, `email`, `phone` y `status` se envían como
+  parte del body completo.
+- Para depurar POST, coloca breakpoints en `create_user`,
+  `get_user_service`, `UserService.create_user`, `BaseService.create`,
+  `UserRepository._to_orm`, `SQLBaseRepository.save` y
+  `UserRepository._to_domain`.
+- Para depurar PUT, sigue `update_user`, `UserService.update_user`,
+  `BaseService.get_by_id`, `UserRepository.update`,
+  `SQLBaseRepository._commit` y `UserRepository._to_domain`.
+- Para depurar PATCH, sigue `patch_user` y observa `payload.model_fields_set`,
+  `values` y `current`; después continúa por `UserService.update_user`,
+  `BaseService.get_by_id`/`update`, `UserRepository.update`,
+  `SQLBaseRepository._commit` y `UserRepository._to_domain`. Para PATCH solo de
+  contraseña, comprueba que `values` contenga solo `password`, que los campos y
+  roles restantes se completen desde `current`, y que el valor persistido sea
+  un hash verificable, no la contraseña en texto plano.
+
+La prueba
+`test_patch_user_password_only_hashes_new_password_and_preserves_other_fields`
+en `tests/integration/test_users_api.py` cubre el PATCH que envía solo
+`password`: verifica el hash nuevo y que username, email, teléfono, estado y
+roles permanezcan iguales.
 
 ## Pruebas
 

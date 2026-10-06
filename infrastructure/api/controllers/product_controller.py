@@ -4,6 +4,7 @@ from domain.entities.product import Product
 from infrastructure.api.dependencies import get_product_service
 from infrastructure.api.schemas.product_schemas import (
     ProductCreate,
+    ProductPatch,
     ProductResponse,
     ProductUpdate,
 )
@@ -14,6 +15,18 @@ def update_product(product_id: int | UUID, payload: ProductUpdate) -> Product:
     if not isinstance(product_id, UUID):
         raise TypeError("El ID de un producto debe ser UUID.")
     return Product(id=product_id, name=payload.name)
+
+def patch_product(
+    product_id: int | UUID,
+    current: Product,
+    payload: ProductPatch,
+) -> Product:
+    if not isinstance(product_id, UUID):
+        raise TypeError("El ID de un producto debe ser UUID.")
+    return Product(
+        id=product_id,
+        name=payload.name if "name" in payload.model_fields_set else current.name,
+    )
 
 
 router = create_generic_router(
@@ -27,4 +40,6 @@ router = create_generic_router(
     entity_id_type=UUID,
     prefix="/products",
     tags=["Products"],
+    patch_schema=ProductPatch,
+    patch_factory=patch_product,
 )

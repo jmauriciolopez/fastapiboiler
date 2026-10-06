@@ -160,3 +160,74 @@ def test_username_is_unique_among_active_users_and_reusable_after_deletion(
         json={**payload, "email": "nueva@example.com"},
     )
     assert reused.status_code == 201
+
+
+def test_patch_user_preserves_unprovided_fields_and_updates_roles(
+    client: TestClient,
+) -> None:
+    first_role = client.post("/api/v1/roles/", json={"name": "member"}).json()
+    second_role = client.post("/api/v1/roles/", json={"name": "admin"}).json()
+    created = client.post(
+        "/api/v1/users/",
+        json={
+            "username": "ada",
+            "email": "ada@example.com",
+            "phone": "+1-555-0100",
+            "password": "un-secreto-seguro",
+            "role_ids": [first_role["id"]],
+        },
+    ).json()
+
+    patched = client.patch(
+        f"/api/v1/users/{created['id']}",
+        json={"username": "ada-lovelace", "role_ids": [second_role["id"]]},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["username"] == "ada-lovelace"
+    assert patched.json()["email"] == "ada@example.com"
+    assert patched.json()["phone"] == "+1-555-0100"
+    assert patched.json()["status"] == "pending"
+    assert [role["id"] for role in patched.json()["roles"]] == [second_role["id"]]
+    assert client.patch(f"/api/v1/users/{created['id']}", json={"email": None}).status_code == 422
+
+
+def test_patch_user_password_only_hashes_new_password_and_preserves_other_fields(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    old_password = "clave-anterior-segura"
+    new_password = "clave-nueva-segura"
+    role = client.post("/api/v1/roles/", json={"name": "password-patch-role"}).json()
+    created = client.post(
+        "/api/v1/users/",
+        json={
+            "username": "ada",
+            "email": "ada@example.com",
+            "phone": "+1-555-0100",
+            "password": old_password,
+            "role_ids": [role["id"]],
+        },
+    ).json()
+
+    patched = client.patch(
+        f"/api/v1/users/{created['id']}",
+        json={"password": new_password},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["username"] == "ada"
+    assert patched.json()["email"] == "ada@example.com"
+    assert patched.json()["phone"] == "+1-555-0100"
+    assert patched.json()["status"] == "pending"
+    assert [saved_role["id"] for saved_role in patched.json()["roles"]] == [role["id"]]
+    assert "password" not in patched.json()
+    assert "hashed_password" not in patched.json()
+
+    with session_factory() as db:
+        persisted_user = db.query(UserORM).filter_by(id=UUID(created["id"])).one()
+        assert persisted_user.hashed_password != old_password
+        assert PasswordHash.recommended().verify(
+            new_password,
+            persisted_user.hashed_password,
+        )

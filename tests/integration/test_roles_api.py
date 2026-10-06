@@ -33,6 +33,14 @@ def test_role_endpoints_use_database_and_expose_create_list_and_get(
     update_response = client.put(f"/api/v1/roles/{role_id}", json={"name": "operator"})
     assert update_response.status_code == 200
     assert update_response.json()["name"] == "operator"
+
+    patch_response = client.patch(f"/api/v1/roles/{role_id}", json={})
+    assert patch_response.status_code == 200
+    assert patch_response.json()["name"] == "operator"
+    patch_response = client.patch(f"/api/v1/roles/{role_id}", json={"name": "maintainer"})
+    assert patch_response.status_code == 200
+    assert patch_response.json()["name"] == "maintainer"
+    assert client.patch(f"/api/v1/roles/{role_id}", json={"name": None}).status_code == 422
     assert client.put(f"/api/v1/roles/{role_id}", json={"name": "reader"}).status_code == 409
 
     delete_response = client.delete(f"/api/v1/roles/{role_id}")
