@@ -2,11 +2,12 @@
 
 import pytest
 
-from shared.infrastructure.database import get_db, normalize_database_url
+from shared.infrastructure.config.settings import settings
+from shared.infrastructure.persistence.database import get_db, normalize_database_url
 
 
 def test_database_dependency_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(settings, "database_url", "")
 
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
         next(get_db())

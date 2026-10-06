@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import Boolean, DateTime, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from shared.infrastructure.database import Base
+from shared.infrastructure.persistence.database import Base
 
 
 class ProductORM(Base):

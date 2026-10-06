@@ -1,8 +1,8 @@
+from application.ports.logger import LoggerPort
 from application.ports.password_hasher import PasswordHasher
 from application.ports.token_service import TokenServicePort
 from domain.exceptions.auth_exceptions import InvalidCredentialsException
 from domain.repositories.user_repository import UserRepositoryPort
-from application.ports.logger import LoggerPort
 
 
 class AuthService:

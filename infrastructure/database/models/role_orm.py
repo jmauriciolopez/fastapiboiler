@@ -17,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from shared.infrastructure.database import Base
+from shared.infrastructure.persistence.database import Base
 
 if TYPE_CHECKING:
     from infrastructure.database.models.user_orm import UserORM

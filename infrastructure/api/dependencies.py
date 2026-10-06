@@ -20,7 +20,7 @@ from infrastructure.database.repositories.user_repository import UserRepository
 from infrastructure.logging.std_logger import StdLogger
 from infrastructure.security.password_hasher import Argon2PasswordHasher
 from infrastructure.security.token_service import JwtTokenService
-from shared.infrastructure.database import get_db
+from shared.infrastructure.persistence.database import get_db
 
 
 def get_logger() -> LoggerPort:

@@ -1,10 +1,10 @@
 from uuid import UUID
 
+from application.ports.logger import LoggerPort
 from application.ports.password_hasher import PasswordHasher
 from domain.entities.user import User, UserStatus
 from domain.repositories.user_repository import UserRepositoryPort
 from shared.application.base_service import BaseService
-from application.ports.logger import LoggerPort
 
 
 class UserService(BaseService[User]):

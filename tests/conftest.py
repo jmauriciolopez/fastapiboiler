@@ -15,7 +15,7 @@ from infrastructure.database.models.product_orm import ProductORM  # noqa: F401
 from infrastructure.database.models.role_orm import RoleORM  # noqa: F401
 from infrastructure.database.models.user_orm import UserORM  # noqa: F401
 from main import app
-from shared.infrastructure.database import Base, get_db
+from shared.infrastructure.persistence.database import Base, get_db
 
 
 @pytest.fixture

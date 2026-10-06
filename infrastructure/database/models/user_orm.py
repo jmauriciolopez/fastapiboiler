@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from domain.entities.user import UserStatus
 from infrastructure.database.models.role_orm import RoleORM, user_roles
-from shared.infrastructure.database import Base
+from shared.infrastructure.persistence.database import Base
 
 
 class UserORM(Base):

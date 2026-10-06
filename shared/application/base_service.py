@@ -1,9 +1,9 @@
 from typing import Generic, TypeVar
 from uuid import UUID
 
+from application.ports.logger import LoggerPort
 from shared.domain.pagination import PaginatedResult
 from shared.domain.repository_port import RepositoryPort
-from application.ports.logger import LoggerPort
 
 M = TypeVar("M")
 
