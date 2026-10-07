@@ -13,13 +13,15 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(
+async def login(
     payload: LoginRequest,
     service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
-    return TokenResponse(access_token=service.login(payload.username, payload.password))
+    return TokenResponse(
+        access_token=await service.login(payload.username, payload.password)
+    )
 
 
 @router.get("/me", response_model=UserResponse)
-def read_current_user(user: Annotated[User, Depends(get_current_user)]) -> User:
+async def read_current_user(user: Annotated[User, Depends(get_current_user)]) -> User:
     return user

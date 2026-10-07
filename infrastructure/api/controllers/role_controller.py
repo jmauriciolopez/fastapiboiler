@@ -1,5 +1,6 @@
 from uuid import UUID
-
+from fastapi import APIRouter, Depends, Query, Response, status
+from infrastructure.api.security import get_current_user
 from domain.entities.role import Role
 from infrastructure.api.dependencies import get_role_service
 from infrastructure.api.schemas.role_schemas import (
@@ -42,4 +43,5 @@ router = create_generic_router(
     tags=["Roles"],
     patch_schema=RolePatch,
     patch_factory=patch_role,
+     dependencies=[Depends(get_current_user)]
 )

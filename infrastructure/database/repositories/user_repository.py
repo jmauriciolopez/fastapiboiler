@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlalchemy.orm import Query, Session, selectinload
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from domain.entities.role import Role
-from domain.entities.user import User
+from domain.entities.user import User, UserStatus
 from domain.repositories.user_repository import UserRepositoryPort
 from infrastructure.database.models.role_orm import RoleORM
 from infrastructure.database.models.user_orm import UserORM
@@ -20,15 +21,12 @@ class UserRepository(SQLBaseRepository[User, UserORM], UserRepositoryPort):
         "uq_users_active_username_ci": "Ya existe un usuario con ese nombre de usuario.",
     }
 
-    def __init__(self, db: Session) -> None:
-        super().__init__(db, User, UserORM, "Usuario")
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, User, UserORM, "Usuario")
 
-    def _active_query(self) -> Query[UserORM]:
-        return (
-            super()
-            ._active_query()
-            .options(selectinload(UserORM.roles))
-        )
+    # ------------------------------------------------------------------
+    # Mapping
+    # ------------------------------------------------------------------
 
     def _to_domain(self, orm_entity: UserORM) -> User:
         roles = [
@@ -48,38 +46,106 @@ class UserRepository(SQLBaseRepository[User, UserORM], UserRepositoryPort):
             email=orm_entity.email,
             phone=orm_entity.phone,
             hashed_password=orm_entity.hashed_password,
-            status=orm_entity.status,
+            # Convert VARCHAR → domain enum at the anti-corruption boundary
+            status=UserStatus(orm_entity.status),
             roles=roles,
             created_on=orm_entity.created_on,
             updated_on=orm_entity.updated_on,
             deleted=orm_entity.deleted,
         )
 
-    def get_by_username(self, username: str) -> User | None:
-        """Busca un usuario activo por nombre de usuario, sin distinguir mayúsculas.
-
-        La comparación es insensible a mayúsculas para ser coherente con el
-        índice único parcial ``uq_users_active_username_ci``.
-        """
-        orm_entity = (
-            self._active_query()
-            .filter(func.lower(UserORM.username) == username.lower())
-            .first()
+    def _to_orm(self, entity: User) -> UserORM:
+        # Roles are resolved separately via _get_role_orms before calling save();
+        # on a plain save() the domain entity carries populated Role objects whose
+        # IDs we use to load the ORM counterparts.
+        return UserORM(
+            id=entity.id,
+            username=entity.username,
+            email=entity.email,
+            phone=entity.phone,
+            hashed_password=entity.hashed_password,
+            status=entity.status.value,  # enum → string, no domain import in ORM
+            created_on=entity.created_on,
+            updated_on=entity.updated_on,
+            deleted=entity.deleted,
+            # Roles are attached by save() / update() after async role resolution
         )
+
+    # ------------------------------------------------------------------
+    # Queries that load the roles relationship
+    # ------------------------------------------------------------------
+
+    def _active_select(self):  # type: ignore[override]
+        return (
+            super()
+            ._active_select()
+            .options(selectinload(UserORM.roles))
+        )
+
+    # ------------------------------------------------------------------
+    # Override save() to attach resolved role ORM objects
+    # ------------------------------------------------------------------
+
+    async def save(self, entity: User) -> User:
+        role_orms = await self._get_role_orms(entity.roles)
+        orm_entity = self._to_orm(entity)
+        orm_entity.roles = role_orms
+        self.session.add(orm_entity)
+        await self._flush()
+        await self.session.refresh(orm_entity)
+        return self._to_domain(orm_entity)
+
+    # ------------------------------------------------------------------
+    # Override update() to sync the roles relationship
+    # ------------------------------------------------------------------
+
+    async def update(self, entity_id: int | UUID, entity: User) -> User:
+        orm_entity = await self._get_active_orm_entity(entity_id)
+        role_orms = await self._get_role_orms(entity.roles)
+
+        orm_entity.username = entity.username
+        orm_entity.email = entity.email
+        orm_entity.phone = entity.phone
+        orm_entity.hashed_password = entity.hashed_password
+        orm_entity.status = entity.status.value
+        orm_entity.roles = role_orms
+        orm_entity.updated_on = datetime.now(UTC)
+
+        await self._flush()
+        await self.session.refresh(orm_entity)
+        return self._to_domain(orm_entity)
+
+    # ------------------------------------------------------------------
+    # Domain-specific queries
+    # ------------------------------------------------------------------
+
+    async def get_by_username(self, username: str) -> User | None:
+        """Case-insensitive lookup — consistent with the partial unique index."""
+        stmt = (
+            self._active_select()
+            .where(func.lower(UserORM.username) == username.lower())
+        )
+        result = await self.session.execute(stmt)
+        orm_entity = result.scalars().first()
         return None if orm_entity is None else self._to_domain(orm_entity)
 
-    def get_active_roles(self, role_ids: list[UUID]) -> list[Role]:
+    async def get_active_roles(self, role_ids: list[UUID]) -> list[Role]:
         if not role_ids:
             return []
-        orm_roles = (
-            self.db.query(RoleORM)
-            .filter(RoleORM.id.in_(role_ids), RoleORM.deleted.is_(False))
-            .all()
+        stmt = select(RoleORM).where(
+            RoleORM.id.in_(role_ids),
+            RoleORM.deleted.is_(False),
         )
+        result = await self.session.execute(stmt)
+        orm_roles = result.scalars().all()
+
         if len(orm_roles) != len(role_ids):
             found_ids = {role.id for role in orm_roles}
-            missing_ids = [role_id for role_id in role_ids if role_id not in found_ids]
-            raise EntityNotFoundException(f"No existen roles activos con IDs: {missing_ids}.")
+            missing_ids = [rid for rid in role_ids if rid not in found_ids]
+            raise EntityNotFoundException(
+                f"No existen roles activos con IDs: {missing_ids}."
+            )
+
         return [
             Role(
                 id=role.id,
@@ -91,45 +157,22 @@ class UserRepository(SQLBaseRepository[User, UserORM], UserRepositoryPort):
             for role in orm_roles
         ]
 
-    def _get_role_orms(self, roles: list[Role]) -> list[RoleORM]:
+    # ------------------------------------------------------------------
+    # Internal helper
+    # ------------------------------------------------------------------
+
+    async def _get_role_orms(self, roles: list[Role]) -> list[RoleORM]:
         role_ids = [role.id for role in roles]
         if not role_ids:
             return []
-        orm_roles = (
-            self.db.query(RoleORM)
-            .filter(RoleORM.id.in_(role_ids), RoleORM.deleted.is_(False))
-            .all()
+        stmt = select(RoleORM).where(
+            RoleORM.id.in_(role_ids),
+            RoleORM.deleted.is_(False),
         )
+        result = await self.session.execute(stmt)
+        orm_roles = result.scalars().all()
         if len(orm_roles) != len(role_ids):
-            raise EntityNotFoundException("Uno o más roles no existen o están eliminados.")
-        return orm_roles
-
-    def _to_orm(self, entity: User) -> UserORM:
-        orm_entity = UserORM(
-            id=entity.id,
-            username=entity.username,
-            email=entity.email,
-            phone=entity.phone,
-            hashed_password=entity.hashed_password,
-            status=entity.status,
-            created_on=entity.created_on,
-            updated_on=entity.updated_on,
-            deleted=entity.deleted,
-            roles=self._get_role_orms(entity.roles),
-        )
-        return orm_entity
-
-    def update(self, entity_id: int | UUID, entity: User) -> User:
-        orm_entity = self._get_active_orm_entity(entity_id)
-        role_orms = self._get_role_orms(entity.roles)
-
-        orm_entity.username = entity.username
-        orm_entity.email = entity.email
-        orm_entity.phone = entity.phone
-        orm_entity.hashed_password = entity.hashed_password
-        orm_entity.status = entity.status
-        orm_entity.roles = role_orms
-        orm_entity.updated_on = datetime.now(UTC)
-        self._commit()
-        self.db.refresh(orm_entity)
-        return self._to_domain(orm_entity)
+            raise EntityNotFoundException(
+                "Uno o más roles no existen o están eliminados."
+            )
+        return list(orm_roles)

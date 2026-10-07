@@ -1,11 +1,25 @@
+"""Async generic SQLAlchemy repository.
+
+Repositories no longer own the transaction: they add/merge objects to the
+session and flush, but never call ``session.commit()``.  The Unit of Work
+(owned by the application service) decides when to commit.
+
+Subclasses MUST override ``_to_domain`` and ``_to_orm`` — the base
+implementations are intentionally abstract so that column-aliasing bugs
+(e.g. ORM column named "name" mapped to domain attribute "username") are
+caught at class-definition time rather than silently at runtime.
+"""
+
+from abc import abstractmethod
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import ClassVar, Generic, TypeVar
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import DeclarativeBase, Query, Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import DeclarativeBase
 
 from shared.domain.exceptions import DomainConflictException, EntityNotFoundException
 from shared.domain.pagination import PaginatedResult
@@ -15,59 +29,68 @@ from shared.infrastructure.integrity_errors import violates_unique_constraint
 M = TypeVar("M")
 O = TypeVar("O", bound=DeclarativeBase)
 
+
 class SQLBaseRepository(RepositoryPort[M], Generic[M, O]):
     _integrity_conflict_messages: ClassVar[Mapping[str, str]] = {}
 
     def __init__(
         self,
-        db: Session,
+        session: AsyncSession,
         domain_model: type[M],
         orm_model: type[O],
         resource_name: str = "Recurso",
     ) -> None:
-        self.db = db
+        self.session = session
         self.domain_model = domain_model
         self.orm_model = orm_model
         self.resource_name = resource_name
 
-    def _to_domain(self, orm_entity: O) -> M:
-        return self.domain_model(**{c.name: getattr(orm_entity, c.name) for c in orm_entity.__table__.columns})
+    # ------------------------------------------------------------------
+    # Subclasses must implement these two methods to avoid silent mapping
+    # bugs caused by ORM column aliases diverging from domain attributes.
+    # ------------------------------------------------------------------
 
-    def save(self, entity: M) -> M:
+    @abstractmethod
+    def _to_domain(self, orm_entity: O) -> M:
+        """Convert an ORM row to a pure domain entity."""
+
+    @abstractmethod
+    def _to_orm(self, entity: M) -> O:
+        """Convert a domain entity to an ORM model instance."""
+
+    # ------------------------------------------------------------------
+    # CRUD — no commit calls; the Unit of Work owns the transaction.
+    # ------------------------------------------------------------------
+
+    async def save(self, entity: M) -> M:
         orm_entity = self._to_orm(entity)
-        self.db.add(orm_entity)
-        self._commit()
-        self.db.refresh(orm_entity)
+        self.session.add(orm_entity)
+        await self._flush()
+        await self.session.refresh(orm_entity)
         return self._to_domain(orm_entity)
 
-    def _to_orm(self, entity: M) -> O:
-        entity_data = {
-            column.name: getattr(entity, column.name)
-            for column in self.orm_model.__table__.columns
-            if hasattr(entity, column.name)
-        }
-        return self.orm_model(**entity_data)
+    async def get_by_id(self, entity_id: int | UUID) -> M:
+        return self._to_domain(await self._get_active_orm_entity(entity_id))
 
-    def get_by_id(self, entity_id: int | UUID) -> M:
-        return self._to_domain(self._get_active_orm_entity(entity_id))
+    async def get_all(self) -> list[M]:
+        stmt = self._active_select()
+        result = await self.session.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
 
-    def get_all(self) -> list[M]:
-        orm_entities = self._active_query().all()
-        return [self._to_domain(item) for item in orm_entities]
+    async def get_page(self, limit: int, offset: int) -> PaginatedResult[M]:
+        base_stmt = self._active_select()
 
-    def get_page(self, limit: int, offset: int) -> PaginatedResult[M]:
-        query = self._active_query()
-        total = query.with_entities(func.count()).scalar() or 0
-        orm_entities = query.offset(offset).limit(limit).all()
-        return PaginatedResult(
-            items=[self._to_domain(item) for item in orm_entities],
-            total=total,
-            limit=limit,
-            offset=offset,
-        )
+        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total: int = (await self.session.execute(count_stmt)).scalar_one()
 
-    def update(self, entity_id: int | UUID, entity: M) -> M:
-        orm_entity = self._get_active_orm_entity(entity_id)
+        page_stmt = base_stmt.offset(offset).limit(limit)
+        result = await self.session.execute(page_stmt)
+        items = [self._to_domain(row) for row in result.scalars().all()]
+
+        return PaginatedResult(items=items, total=total, limit=limit, offset=offset)
+
+    async def update(self, entity_id: int | UUID, entity: M) -> M:
+        orm_entity = await self._get_active_orm_entity(entity_id)
         columns = {column.name for column in self.orm_model.__table__.columns}
         excluded_fields = {"id", "deleted", "created_on", "updated_on"}
         for field_name in columns - excluded_fields:
@@ -75,28 +98,31 @@ class SQLBaseRepository(RepositoryPort[M], Generic[M, O]):
                 setattr(orm_entity, field_name, getattr(entity, field_name))
         if "updated_on" in columns:
             self._set_orm_attribute(orm_entity, "updated_on", datetime.now(UTC))
-        self._commit()
-        self.db.refresh(orm_entity)
+        await self._flush()
+        await self.session.refresh(orm_entity)
         return self._to_domain(orm_entity)
 
-    def soft_delete(self, entity_id: int | UUID) -> None:
-        orm_entity = self._get_active_orm_entity(entity_id)
+    async def soft_delete(self, entity_id: int | UUID) -> None:
+        orm_entity = await self._get_active_orm_entity(entity_id)
         if not hasattr(orm_entity, "deleted"):
-            raise TypeError(f"{self.orm_model.__name__} debe implementar el campo 'deleted'.")
-        orm_entity.deleted = True
+            raise TypeError(
+                f"{self.orm_model.__name__} debe implementar el campo 'deleted'."
+            )
+        orm_entity.deleted = True  # type: ignore[attr-defined]
         if hasattr(orm_entity, "updated_on"):
-            orm_entity.updated_on = datetime.now(UTC)
-        self._commit()
+            orm_entity.updated_on = datetime.now(UTC)  # type: ignore[attr-defined]
+        await self._flush()
 
-    def _commit(self) -> None:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _flush(self) -> None:
         try:
-            self.db.commit()
+            await self.session.flush()
         except IntegrityError as exc:
-            self.db.rollback()
+            await self.session.rollback()
             self._handle_integrity_error(exc)
-            raise
-        except Exception:
-            self.db.rollback()
             raise
 
     def _handle_integrity_error(self, exc: IntegrityError) -> None:
@@ -108,17 +134,21 @@ class SQLBaseRepository(RepositoryPort[M], Generic[M, O]):
     def _set_orm_attribute(entity: O, field_name: str, value: object) -> None:
         setattr(entity, field_name, value)
 
-    def _active_query(self) -> Query[O]:
-        query = self.db.query(self.orm_model)
+    def _active_select(self):  # type: ignore[return]
+        """Return a SELECT statement filtered to non-deleted rows."""
+        stmt = select(self.orm_model)
         deleted_column = getattr(self.orm_model, "deleted", None)
         if deleted_column is not None:
-            query = query.filter(deleted_column.is_(False))
-        return query
+            stmt = stmt.where(deleted_column.is_(False))
+        return stmt
 
-    def _get_active_orm_entity(self, entity_id: int | UUID) -> O:
-        id_field_name = "id"
-        id_column = getattr(self.orm_model, id_field_name)
-        orm_entity = self._active_query().filter(id_column == entity_id).first()
+    async def _get_active_orm_entity(self, entity_id: int | UUID) -> O:
+        id_column = getattr(self.orm_model, "id")
+        stmt = self._active_select().where(id_column == entity_id)
+        result = await self.session.execute(stmt)
+        orm_entity = result.scalars().first()
         if orm_entity is None:
-            raise EntityNotFoundException(f"{self.resource_name} con ID {entity_id} no existe.")
+            raise EntityNotFoundException(
+                f"{self.resource_name} con ID {entity_id} no existe."
+            )
         return orm_entity

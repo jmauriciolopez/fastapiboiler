@@ -1,8 +1,10 @@
-"""Pruebas de integración de los endpoints y el repositorio de roles."""
+"""Integration tests for role endpoints and repository."""
+
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.entities.role import Role
 from infrastructure.database.repositories.role_repository import RoleRepository
@@ -64,18 +66,24 @@ def test_role_endpoints_use_database_and_expose_create_list_and_get(
 
 
 def test_role_repository_rolls_back_unique_conflict_and_session_can_continue(
-    session_factory: sessionmaker[Session],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    db = session_factory()
-    repository = RoleRepository(db)
-    try:
-        repository.save(Role(name="admin"))
+    async def _run() -> None:
+        async with session_factory() as db:
+            repository = RoleRepository(db)
 
-        with pytest.raises(DomainConflictException, match="Ya existe un rol"):
-            repository.save(Role(name="ADMIN"))
+            await repository.save(Role(name="admin"))
+            await db.commit()
 
-        saved_role = repository.save(Role(name="reader"))
-        assert saved_role.name == "reader"
-        assert len(repository.get_all()) == 2
-    finally:
-        db.close()
+            with pytest.raises(DomainConflictException, match="Ya existe un rol"):
+                await repository.save(Role(name="ADMIN"))
+                await db.commit()
+
+            # Session should still be usable after the conflict
+            saved_role = await repository.save(Role(name="reader"))
+            await db.commit()
+            assert saved_role.name == "reader"
+            all_roles = await repository.get_all()
+            assert len(all_roles) == 2
+
+    asyncio.run(_run())

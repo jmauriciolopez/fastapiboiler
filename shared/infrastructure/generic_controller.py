@@ -1,4 +1,11 @@
-from collections.abc import Callable
+"""Generic async CRUD router factory.
+
+Creates standard Create / Read / Update / Delete / List endpoints for any
+entity that has a ``BaseService``.  Routes are registered with ``async def``
+handlers so FastAPI's ASGI event loop is never blocked.
+"""
+
+from collections.abc import Callable,Sequence
 from enum import Enum
 from inspect import signature
 from typing import Any, Generic, TypeVar
@@ -24,8 +31,10 @@ class PaginatedResponse(BaseModel, Generic[ResponseItem]):
     offset: int
 
 
-def _create_paginated_response_schema(response_schema: type[BaseModel]) -> type[BaseModel]:
-    item_list_schema = list.__class_getitem__(response_schema)
+def _create_paginated_response_schema(
+    response_schema: type[BaseModel],
+) -> type[BaseModel]:
+    item_list_schema = list[response_schema]  # type: ignore[valid-type]
     return create_model(
         f"Paginated{response_schema.__name__}",
         items=(item_list_schema, ...),
@@ -39,9 +48,12 @@ def _with_parameter_types(
     endpoint: Callable[..., Any],
     parameter_types: dict[str, Any],
 ) -> None:
+    """Patch ``__signature__`` so FastAPI introspects the concrete types."""
     endpoint_signature = signature(endpoint)
     parameters = [
-        parameter.replace(annotation=parameter_types.get(parameter.name, parameter.annotation))
+        parameter.replace(
+            annotation=parameter_types.get(parameter.name, parameter.annotation)
+        )
         for parameter in endpoint_signature.parameters.values()
     ]
     endpoint.__signature__ = endpoint_signature.replace(  # type: ignore[attr-defined]
@@ -64,18 +76,20 @@ def create_generic_router(
     max_page_size: int = 100,
     patch_schema: type[PatchSchema] | None = None,
     patch_factory: Callable[[int | UUID, M, PatchSchema], M] | None = None,
+     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     if (patch_schema is None) != (patch_factory is None):
         raise ValueError("patch_schema y patch_factory deben configurarse juntos.")
 
-    router = APIRouter(prefix=prefix, tags=tags)
+    router = APIRouter(prefix=prefix, tags=tags, dependencies=list(dependencies or []))
     paginated_response_schema = _create_paginated_response_schema(response_schema)
 
-    def create(
+    # ------------------------------------------------------------------ create
+    async def create(
         payload: RequestSchema,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> M:
-        return service.create(entity_factory(payload))
+        return await service.create(entity_factory(payload))
 
     _with_parameter_types(create, {"payload": request_schema})
     router.add_api_route(
@@ -87,11 +101,12 @@ def create_generic_router(
         response_model=response_schema,
     )
 
-    def get_by_id(
+    # --------------------------------------------------------------- get by id
+    async def get_by_id(
         entity_id: int | UUID,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> M:
-        return service.get_by_id(entity_id)
+        return await service.get_by_id(entity_id)
 
     _with_parameter_types(get_by_id, {"entity_id": entity_id_type})
     router.add_api_route(
@@ -103,17 +118,15 @@ def create_generic_router(
         response_model=response_schema,
     )
 
-    def update(
+    # ------------------------------------------------------------------ update
+    async def update(
         entity_id: int | UUID,
         payload: UpdateSchema,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> M:
-        return service.update(entity_id, update_factory(entity_id, payload))
+        return await service.update(entity_id, update_factory(entity_id, payload))
 
-    _with_parameter_types(
-        update,
-        {"entity_id": entity_id_type, "payload": update_schema},
-    )
+    _with_parameter_types(update, {"entity_id": entity_id_type, "payload": update_schema})
     router.add_api_route(
         "/{entity_id}",
         update,
@@ -123,17 +136,18 @@ def create_generic_router(
         response_model=response_schema,
     )
 
+    # ------------------------------------------------------------------- patch
     if patch_schema is not None and patch_factory is not None:
 
-        def patch(
+        async def patch(
             entity_id: int | UUID,
             payload: PatchSchema,
             service: BaseService[M] = Depends(service_provider),  # noqa: B008
         ) -> M:
-            current = service.get_by_id(entity_id)
+            current = await service.get_by_id(entity_id)
             if not payload.model_fields_set:
                 return current
-            return service.update(
+            return await service.update(
                 entity_id,
                 patch_factory(entity_id, current, payload),
             )
@@ -151,11 +165,12 @@ def create_generic_router(
             response_model=response_schema,
         )
 
-    def soft_delete(
+    # --------------------------------------------------------------- delete
+    async def soft_delete(
         entity_id: int | UUID,
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> Response:
-        service.soft_delete(entity_id)
+        await service.soft_delete(entity_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     _with_parameter_types(soft_delete, {"entity_id": entity_id_type})
@@ -168,12 +183,13 @@ def create_generic_router(
         response_class=Response,
     )
 
-    def list_all(
+    # ----------------------------------------------------------------- list
+    async def list_all(
         limit: int = Query(default_page_size, ge=1, le=max_page_size),
         offset: int = Query(0, ge=0),
         service: BaseService[M] = Depends(service_provider),  # noqa: B008
     ) -> PaginatedResult[M]:
-        return service.list_page(limit=limit, offset=offset)
+        return await service.list_page(limit=limit, offset=offset)
 
     router.add_api_route(
         "/",

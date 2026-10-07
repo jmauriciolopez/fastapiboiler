@@ -1,4 +1,4 @@
-"""Pruebas unitarias del router genérico reutilizado por los controladores."""
+"""Unit tests for the generic CRUD router factory."""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -8,6 +8,7 @@ from shared.infrastructure.exceptions import register_exception_handlers
 from shared.infrastructure.generic_controller import create_generic_router
 from tests.fakes import (
     FakeLogger,
+    FakeUnitOfWork,
     InMemoryRepository,
     PayloadPatchSchema,
     PayloadSchema,
@@ -15,14 +16,15 @@ from tests.fakes import (
 )
 
 
-def test_generic_router_validates_request_schema_and_creates_domain_object() -> None:
-    repository = InMemoryRepository[dict[str, str]]()
+def _make_service(repository: InMemoryRepository) -> BaseService:  # type: ignore[type-arg]
+    return BaseService(repository, FakeUnitOfWork(), FakeLogger())  # type: ignore[arg-type]
 
-    def get_service() -> BaseService[dict[str, str]]:
-        return BaseService(repository, FakeLogger())
+
+def test_generic_router_validates_request_schema_and_creates_domain_object() -> None:
+    repository: InMemoryRepository[dict[str, str]] = InMemoryRepository()
 
     router = create_generic_router(
-        get_service,
+        lambda: _make_service(repository),
         ValidatedPayloadSchema,
         lambda payload: payload.model_dump(),
         ValidatedPayloadSchema,
@@ -73,13 +75,10 @@ def test_generic_router_validates_request_schema_and_creates_domain_object() -> 
 
 
 def test_generic_router_patch_only_updates_fields_sent() -> None:
-    repository = InMemoryRepository[dict[str, str]]()
-
-    def get_service() -> BaseService[dict[str, str]]:
-        return BaseService(repository, FakeLogger())
+    repository: InMemoryRepository[dict[str, str]] = InMemoryRepository()
 
     router = create_generic_router(
-        get_service,
+        lambda: _make_service(repository),
         PayloadSchema,
         lambda payload: {"name": payload.name, "description": "preserved"},
         PayloadSchema,
@@ -103,7 +102,9 @@ def test_generic_router_patch_only_updates_fields_sent() -> None:
 
     assert patched.status_code == 200
     assert patched.json() == {"name": "changed"}
-    assert repository.get_by_id(1) == {
+
+    import asyncio
+    assert asyncio.run(repository.get_by_id(1)) == {
         "name": "changed",
         "description": "preserved",
     }

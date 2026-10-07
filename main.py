@@ -17,7 +17,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
-        engine.dispose()
+        await engine.dispose()
 
 
 app = FastAPI(title="Demo API", version="0.1.0", lifespan=lifespan)

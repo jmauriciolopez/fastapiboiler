@@ -1,10 +1,12 @@
-"""Pruebas de integración de los endpoints de usuarios."""
+"""Integration tests for user endpoints."""
 
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from pwdlib import PasswordHash
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from infrastructure.database.models.user_orm import UserORM
 from infrastructure.database.repositories.user_repository import UserRepository
@@ -12,8 +14,10 @@ from infrastructure.database.repositories.user_repository import UserRepository
 
 def test_user_endpoints_hash_passwords_and_manage_multiple_roles(
     client: TestClient,
-    session_factory: sessionmaker[Session],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    import asyncio
+
     password = "un-secreto-seguro"
     first_role = client.post("/api/v1/roles/", json={"name": "admin"}).json()
     second_role = client.post("/api/v1/roles/", json={"name": "editor"}).json()
@@ -37,11 +41,18 @@ def test_user_endpoints_hash_passwords_and_manage_multiple_roles(
     assert "password" not in created_user
     assert "hashed_password" not in created_user
 
-    with session_factory() as db:
-        persisted_user = db.query(UserORM).filter_by(id=UUID(user_id)).one()
-        saved_hash = persisted_user.hashed_password
-        assert saved_hash != password
-        assert PasswordHash.recommended().verify(password, saved_hash)
+    async def _check_hash() -> str:
+        async with session_factory() as db:
+            result = await db.execute(
+                select(UserORM).where(UserORM.id == UUID(user_id))
+            )
+            persisted = result.scalars().one()
+            saved_hash = persisted.hashed_password
+            assert saved_hash != password
+            assert PasswordHash.recommended().verify(password, saved_hash)
+            return saved_hash
+
+    saved_hash = asyncio.run(_check_hash())
 
     assert client.post("/api/v1/users/", json=payload).status_code == 409
     assert (
@@ -89,8 +100,14 @@ def test_user_endpoints_hash_passwords_and_manage_multiple_roles(
     assert updated_user["status"] == "active"
     assert [role["id"] for role in updated_user["roles"]] == [second_role["id"]]
 
-    with session_factory() as db:
-        assert db.query(UserORM).filter_by(id=UUID(user_id)).one().hashed_password == saved_hash
+    async def _check_hash_unchanged() -> None:
+        async with session_factory() as db:
+            result = await db.execute(
+                select(UserORM).where(UserORM.id == UUID(user_id))
+            )
+            assert result.scalars().one().hashed_password == saved_hash
+
+    asyncio.run(_check_hash_unchanged())
 
     assert client.delete(f"/api/v1/users/{user_id}").status_code == 204
     assert client.delete(f"/api/v1/users/{another_user['id']}").status_code == 204
@@ -103,8 +120,10 @@ def test_user_endpoints_hash_passwords_and_manage_multiple_roles(
 
 def test_user_repository_finds_users_by_username_and_hides_deleted_ones(
     client: TestClient,
-    session_factory: sessionmaker[Session],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    import asyncio
+
     created = client.post(
         "/api/v1/users/",
         json={
@@ -116,18 +135,22 @@ def test_user_repository_finds_users_by_username_and_hides_deleted_ones(
         },
     ).json()
 
-    with session_factory() as db:
-        repository = UserRepository(db)
+    async def _check() -> None:
+        async with session_factory() as db:
+            repository = UserRepository(db)
 
-        found_user = repository.get_by_username("ada")
-        assert found_user is not None
-        assert found_user.username == "ada"
-        assert repository.get_by_username("ADA") is not None
-        assert repository.get_by_username("grace") is None
+            found_user = await repository.get_by_username("ada")
+            assert found_user is not None
+            assert found_user.username == "ada"
+            assert await repository.get_by_username("ADA") is not None
+            assert await repository.get_by_username("grace") is None
 
-        repository.soft_delete(UUID(created["id"]))
+            await repository.soft_delete(UUID(created["id"]))
+            await db.commit()
 
-        assert repository.get_by_username("ada") is None
+            assert await repository.get_by_username("ada") is None
+
+    asyncio.run(_check())
 
 
 def test_username_is_unique_among_active_users_and_reusable_after_deletion(
@@ -194,8 +217,10 @@ def test_patch_user_preserves_unprovided_fields_and_updates_roles(
 
 def test_patch_user_password_only_hashes_new_password_and_preserves_other_fields(
     client: TestClient,
-    session_factory: sessionmaker[Session],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    import asyncio
+
     old_password = "clave-anterior-segura"
     new_password = "clave-nueva-segura"
     role = client.post("/api/v1/roles/", json={"name": "password-patch-role"}).json()
@@ -224,10 +249,13 @@ def test_patch_user_password_only_hashes_new_password_and_preserves_other_fields
     assert "password" not in patched.json()
     assert "hashed_password" not in patched.json()
 
-    with session_factory() as db:
-        persisted_user = db.query(UserORM).filter_by(id=UUID(created["id"])).one()
-        assert persisted_user.hashed_password != old_password
-        assert PasswordHash.recommended().verify(
-            new_password,
-            persisted_user.hashed_password,
-        )
+    async def _check_new_hash() -> None:
+        async with session_factory() as db:
+            result = await db.execute(
+                select(UserORM).where(UserORM.id == UUID(created["id"]))
+            )
+            persisted = result.scalars().one()
+            assert persisted.hashed_password != old_password
+            assert PasswordHash.recommended().verify(new_password, persisted.hashed_password)
+
+    asyncio.run(_check_new_hash())

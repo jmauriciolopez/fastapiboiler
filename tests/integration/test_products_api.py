@@ -1,16 +1,18 @@
-"""Pruebas de integración del CRUD genérico de productos."""
+"""Integration tests for the generic product CRUD."""
 
+import asyncio
 from uuid import UUID
 
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from infrastructure.database.models.product_orm import ProductORM
 
 
 def test_product_controller_exposes_generic_crud(
     client: TestClient,
-    session_factory: sessionmaker[Session],
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     create_response = client.post("/api/v1/products/", json={"name": "Keyboard"})
 
@@ -19,10 +21,16 @@ def test_product_controller_exposes_generic_crud(
     product_id = UUID(created["id"])
     assert created == {"id": str(product_id), "name": "Keyboard"}
 
-    with session_factory() as db:
-        persisted = db.query(ProductORM).filter_by(id=product_id).one()
-        assert persisted.name == "Keyboard"
-        assert persisted.deleted is False
+    async def _check_persisted() -> None:
+        async with session_factory() as db:
+            result = await db.execute(
+                select(ProductORM).where(ProductORM.id == product_id)
+            )
+            persisted = result.scalars().one()
+            assert persisted.name == "Keyboard"
+            assert persisted.deleted is False
+
+    asyncio.run(_check_persisted())
 
     listed = client.get("/api/v1/products/?limit=1&offset=0")
     assert listed.status_code == 200

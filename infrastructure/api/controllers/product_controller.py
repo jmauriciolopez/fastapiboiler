@@ -1,5 +1,6 @@
 from uuid import UUID
-
+from fastapi import Depends
+from infrastructure.api.security import get_current_user
 from domain.entities.product import Product
 from infrastructure.api.dependencies import get_product_service
 from infrastructure.api.schemas.product_schemas import (
@@ -42,4 +43,5 @@ router = create_generic_router(
     tags=["Products"],
     patch_schema=ProductPatch,
     patch_factory=patch_product,
+    dependencies=[Depends(get_current_user)]
 )
